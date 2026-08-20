@@ -21,6 +21,8 @@ defmodule SymphonyElixir.Tracker do
 
   @callback fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   @callback fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  @callback fetch_issues_by_identifiers([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  @callback identifier_candidate?(String.t()) :: boolean()
   @callback agent_tool_specs() :: [map()]
   @callback execute_agent_tool(String.t(), term(), keyword()) :: map()
   @callback secret_environment_names(map()) :: [String.t()]
@@ -38,6 +40,59 @@ defmodule SymphonyElixir.Tracker do
   @spec fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_ids(issue_ids) do
     adapter().fetch_issues_by_ids(issue_ids)
+  end
+
+  @doc """
+  Fetches issues by their human-readable identifiers (e.g. `EXP-1157`, `GH-123`).
+
+  A successful result contains only issues the tracker knows; identifiers absent
+  from the result are authoritatively missing. Adapters that cannot guarantee
+  that semantics must return `{:error, reason}` instead of a partial success.
+  """
+  @spec fetch_issues_by_identifiers([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_identifiers(identifiers) do
+    adapter().fetch_issues_by_identifiers(identifiers)
+  end
+
+  @doc """
+  Tells whether a string is shaped like one of this tracker's identifiers.
+
+  `fetch_issues_by_identifiers/1` silently skips other strings, so callers use
+  this to distinguish "queried and authoritatively missing" from "never
+  queried".
+  """
+  @spec identifier_candidate?(String.t()) :: boolean()
+  def identifier_candidate?(identifier) do
+    adapter().identifier_candidate?(identifier)
+  end
+
+  @doc """
+  Maps identifiers to numeric tracker ids by stripping a fixed prefix (e.g. `GH-`).
+
+  Identifiers without the prefix or without a purely numeric remainder are
+  dropped so they can never poison an id fetch; callers treat them as unknown
+  and leave any associated state untouched.
+  """
+  @spec strip_identifier_prefix([String.t()], String.t()) :: [String.t()]
+  def strip_identifier_prefix(identifiers, prefix)
+      when is_list(identifiers) and is_binary(prefix) do
+    Enum.flat_map(identifiers, fn identifier ->
+      stripped = String.replace_prefix(identifier, prefix, "")
+
+      if stripped != identifier and Regex.match?(~r/^[0-9]+$/, stripped) do
+        [stripped]
+      else
+        []
+      end
+    end)
+  end
+
+  @doc """
+  Tells whether an identifier survives `strip_identifier_prefix/2` for a prefix.
+  """
+  @spec prefix_identifier?(String.t(), String.t()) :: boolean()
+  def prefix_identifier?(identifier, prefix) when is_binary(identifier) and is_binary(prefix) do
+    strip_identifier_prefix([identifier], prefix) != []
   end
 
   @doc """

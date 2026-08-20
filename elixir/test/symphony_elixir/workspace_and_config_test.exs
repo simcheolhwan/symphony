@@ -611,6 +611,134 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
                     }}
   end
 
+  test "linear client fetches issues by identifiers grouped per team and skips unparseable names" do
+    raw_issue = fn team_key, number ->
+      %{
+        "id" => "uuid-#{team_key}-#{number}",
+        "identifier" => "#{team_key}-#{number}",
+        "title" => "Issue #{number}",
+        "state" => %{"name" => "Done"},
+        "labels" => %{"nodes" => []},
+        "inverseRelations" => %{"nodes" => []}
+      }
+    end
+
+    graphql_fun = fn query, variables ->
+      send(self(), {:identifier_query, query, variables})
+
+      body = %{
+        "data" => %{
+          "issues" => %{
+            "nodes" => Enum.map(variables.numbers, &raw_issue.(variables.teamKey, &1))
+          }
+        }
+      }
+
+      {:ok, body}
+    end
+
+    identifiers = ["MT-1", "OPS-9", "MT-2", "MT-1", "not-an-identifier", "MT_1--0123456789abcdef"]
+
+    assert {:ok, issues} = Client.fetch_issues_by_identifiers_for_test(identifiers, graphql_fun)
+
+    assert Enum.sort(Enum.map(issues, & &1.identifier)) == ["MT-1", "MT-2", "OPS-9"]
+
+    assert_receive {:identifier_query, query, %{teamKey: "MT", numbers: [1, 2], first: 2, relationFirst: 50}}
+    assert_receive {:identifier_query, ^query, %{teamKey: "OPS", numbers: [9], first: 1, relationFirst: 50}}
+    refute_receive {:identifier_query, _query, _variables}
+
+    assert query =~ "SymphonyLinearIssuesByIdentifier"
+    assert query =~ "team: {key:"
+    assert query =~ "number: {in:"
+  end
+
+  test "linear client fetches issues by identifiers without queries when nothing parses" do
+    graphql_fun = fn _query, _variables -> flunk("unexpected tracker query") end
+
+    assert {:ok, []} = Client.fetch_issues_by_identifiers_for_test([], graphql_fun)
+
+    assert {:ok, []} =
+             Client.fetch_issues_by_identifiers_for_test(
+               ["mt-1", "MT_1--0123456789abcdef", "issue", ""],
+               graphql_fun
+             )
+  end
+
+  test "linear client identifier fetch tolerates absent issues but propagates query errors" do
+    empty_fun = fn _query, _variables ->
+      {:ok, %{"data" => %{"issues" => %{"nodes" => []}}}}
+    end
+
+    assert {:ok, []} = Client.fetch_issues_by_identifiers_for_test(["MT-404"], empty_fun)
+
+    error_fun = fn _query, _variables -> {:error, {:linear_api_status, 500}} end
+
+    assert {:error, {:linear_api_status, 500}} =
+             Client.fetch_issues_by_identifiers_for_test(["MT-1"], error_fun)
+  end
+
+  test "linear client splits identifier fetches into batches per team" do
+    numbers = Enum.to_list(1..55)
+    identifiers = Enum.map(numbers, &"MT-#{&1}")
+
+    graphql_fun = fn _query, variables ->
+      send(self(), {:identifier_batch, variables.numbers, variables.first})
+      {:ok, %{"data" => %{"issues" => %{"nodes" => []}}}}
+    end
+
+    assert {:ok, []} = Client.fetch_issues_by_identifiers_for_test(identifiers, graphql_fun)
+
+    first_batch = Enum.take(numbers, 50)
+    second_batch = Enum.drop(numbers, 50)
+
+    assert_receive {:identifier_batch, ^first_batch, 50}
+    assert_receive {:identifier_batch, ^second_batch, 5}
+  end
+
+  test "linear client recognizes issue identifier shapes" do
+    assert Client.issue_identifier?("MT-1")
+    assert Client.issue_identifier?("A2B-204")
+
+    refute Client.issue_identifier?("mt-1")
+    refute Client.issue_identifier?("MT-")
+    refute Client.issue_identifier?("MT_1--0123456789abcdef")
+    refute Client.issue_identifier?("")
+  end
+
+  test "list_workspace_names returns only directories under the local workspace root" do
+    workspace_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-list-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+
+      File.mkdir_p!(Path.join(workspace_root, "MT-1"))
+      File.mkdir_p!(Path.join(workspace_root, "MT-2"))
+      File.write!(Path.join(workspace_root, "stray.txt"), "not a workspace")
+
+      assert {:ok, names} = Workspace.list_workspace_names()
+      assert Enum.sort(names) == ["MT-1", "MT-2"]
+    after
+      File.rm_rf(workspace_root)
+    end
+  end
+
+  test "list_workspace_names returns an empty list when the workspace root is missing" do
+    workspace_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-list-missing-#{System.unique_integer([:positive])}"
+      )
+
+    write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+
+    refute File.exists?(workspace_root)
+    assert {:ok, []} = Workspace.list_workspace_names()
+  end
+
   test "linear client logs response bodies for non-200 graphql responses" do
     log =
       ExUnit.CaptureLog.capture_log(fn ->

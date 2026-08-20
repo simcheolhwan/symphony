@@ -22,6 +22,22 @@ defmodule SymphonyElixir.Jira.Adapter do
   @spec fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_ids(ids), do: client_module().fetch_issues_by_ids(ids)
 
+  @spec fetch_issues_by_identifiers([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_identifiers(identifiers) do
+    identifiers
+    |> Enum.filter(&jira_issue_key?/1)
+    |> client_module().fetch_issues_by_ids()
+  end
+
+  @spec identifier_candidate?(String.t()) :: boolean()
+  def identifier_candidate?(identifier), do: jira_issue_key?(identifier)
+
+  # Jira identifiers are issue keys, accepted verbatim by the bulkfetch
+  # endpoint's issueIdsOrKeys. Non-key strings are dropped so they cannot fail
+  # the whole batch; callers preserve whatever they referred to.
+  defp jira_issue_key?(identifier) when is_binary(identifier),
+    do: Regex.match?(~r/^[A-Z][A-Z0-9_]*-[0-9]+$/, identifier)
+
   @spec agent_tool_specs() :: [map()]
   def agent_tool_specs, do: AgentTool.tool_specs()
 

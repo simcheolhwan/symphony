@@ -22,6 +22,17 @@ defmodule SymphonyElixir.Asana.Adapter do
   @spec fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_ids(ids), do: client_module().fetch_issues_by_ids(ids)
 
+  @spec fetch_issues_by_identifiers([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_identifiers(identifiers) do
+    identifiers
+    |> SymphonyElixir.Tracker.strip_identifier_prefix("ASANA-")
+    |> client_module().fetch_issues_by_ids()
+  end
+
+  @spec identifier_candidate?(String.t()) :: boolean()
+  def identifier_candidate?(identifier),
+    do: SymphonyElixir.Tracker.prefix_identifier?(identifier, "ASANA-")
+
   @spec agent_tool_specs() :: [map()]
   def agent_tool_specs, do: AgentTool.tool_specs()
 

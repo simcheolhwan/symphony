@@ -34,6 +34,15 @@ defmodule SymphonyElixir.Linear.Adapter do
   @spec fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_ids(issue_ids), do: client_module().fetch_issues_by_ids(issue_ids)
 
+  @spec fetch_issues_by_identifiers([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_identifiers(identifiers),
+    do: client_module().fetch_issues_by_identifiers(identifiers)
+
+  # Pure format check, so it stays on Client even when the client module is
+  # overridden for tests.
+  @spec identifier_candidate?(String.t()) :: boolean()
+  def identifier_candidate?(identifier), do: Client.issue_identifier?(identifier)
+
   @spec agent_tool_specs() :: [map()]
   def agent_tool_specs, do: AgentTool.tool_specs()
 

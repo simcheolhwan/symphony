@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Workspace do
   alias SymphonyElixir.{Config, PathSafety, SSH}
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
+  @remote_workspace_entry_marker "__SYMPHONY_WORKSPACE_ENTRY__"
 
   @type worker_host :: String.t() | nil
 
@@ -215,6 +216,69 @@ defmodule SymphonyElixir.Workspace do
   end
 
   def remove_issue_workspaces(_identifier, _worker_host), do: :ok
+
+  @doc """
+  Lists workspace directory names directly under the workspace root.
+
+  Returns directory basenames. Safe identifiers map to their own directory name
+  (see `workspace_key/1`), so callers can treat each name as a candidate issue
+  identifier. A missing root yields an empty list.
+  """
+  @spec list_workspace_names() :: {:ok, [String.t()]} | {:error, term()}
+  def list_workspace_names, do: list_workspace_names(nil)
+
+  @spec list_workspace_names(worker_host()) :: {:ok, [String.t()]} | {:error, term()}
+  def list_workspace_names(nil) do
+    root = Config.local_workspace_root()
+
+    case File.ls(root) do
+      {:ok, entries} ->
+        {:ok, Enum.filter(entries, &File.dir?(Path.join(root, &1)))}
+
+      {:error, :enoent} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        {:error, {:workspace_list_failed, root, reason}}
+    end
+  end
+
+  def list_workspace_names(worker_host) when is_binary(worker_host) do
+    script =
+      [
+        "set -eu",
+        remote_shell_assign("root", Config.settings!().workspace.root),
+        "if [ -d \"$root\" ]; then",
+        "  find \"$root\" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r entry; do",
+        "    printf '%s\\t%s\\n' '#{@remote_workspace_entry_marker}' \"$(basename \"$entry\")\"",
+        "  done",
+        "fi"
+      ]
+      |> Enum.join("\n")
+
+    case run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms) do
+      {:ok, {output, 0}} ->
+        {:ok, parse_remote_workspace_entries(output)}
+
+      {:ok, {output, status}} ->
+        {:error, {:workspace_list_failed, worker_host, {status, output}}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp parse_remote_workspace_entries(output) do
+    output
+    |> IO.iodata_to_binary()
+    |> String.split("\n", trim: true)
+    |> Enum.flat_map(fn line ->
+      case String.split(line, "\t", parts: 2) do
+        [@remote_workspace_entry_marker, name] when name != "" -> [name]
+        _ -> []
+      end
+    end)
+  end
 
   @spec run_before_run_hook(Path.t(), map() | String.t() | nil, worker_host()) ::
           :ok | {:error, term()}

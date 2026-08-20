@@ -85,7 +85,7 @@ Important boundary:
 3. `Issue Tracker Adapter`
    - Fetches candidate issues in active states.
    - Fetches current states for specific issue IDs (reconciliation).
-   - Fetches terminal-state issues during startup cleanup.
+   - Fetches current states for specific issue identifiers (startup cleanup).
    - Normalizes tracker payloads into a stable issue model.
    - MAY expose provider-native agent tools without adding provider-specific write APIs to the
      orchestrator.
@@ -728,14 +728,17 @@ Distinct terminal reasons are important because retry logic and logs differ.
 - `claimed` and `running` checks are REQUIRED before launching any worker.
 - Reconciliation runs before dispatch on every tick.
 - Restart recovery is tracker-driven and filesystem-driven (without a durable orchestrator DB).
-- Startup terminal cleanup removes stale workspaces for issues already in terminal states.
+- Startup terminal cleanup removes stale workspaces for issues already in terminal states by
+  enumerating leftover workspace directories and asking the tracker only about those identifiers
+  (Section 8.6).
 
 ## 8. Polling, Scheduling, and Reconciliation
 
 ### 8.1 Poll Loop
 
 At startup, the service validates config, performs startup cleanup, schedules an immediate tick, and
-then repeats every `polling.interval_ms`.
+then repeats every `polling.interval_ms`. Startup cleanup MUST NOT block service start-up (for
+example the status dashboard), but it completes before the first tick is processed.
 
 The effective poll interval SHOULD be updated when workflow config changes are re-applied.
 
@@ -842,10 +845,15 @@ Part B: Tracker state refresh
 
 When the service starts:
 
-1. Query tracker for issues in terminal states.
-2. For each returned issue identifier, remove the corresponding workspace directory.
-3. If the terminal-issues fetch fails, log a warning and continue startup.
+1. Enumerate the workspace directories on disk; their names are candidate issue identifiers. When
+   no workspaces exist, skip the tracker entirely.
+2. Fetch current states for the candidate identifiers from the tracker. Directory names that are
+   not shaped like tracker identifiers MUST NOT reach the tracker query and MUST be preserved.
+3. A workspace MUST be removed only when the tracker confirms its issue is terminal, or when a
+   successful fetch shows the identifier no longer exists.
+4. If the fetch fails, log a warning, preserve all candidate workspaces, and continue startup.
 
+Cleanup cost scales with leftover workspaces rather than with the project's terminal-issue history.
 This prevents stale terminal workspaces from accumulating after restarts.
 
 ## 9. Workspace Management and Safety
@@ -1190,8 +1198,7 @@ An implementation MUST support these adapter operations:
 1. `fetch_issues_by_states(state_names)`
    - Return normalized issues visible in the configured tracker scope and requested state names.
    - The adapter MUST apply provider-side scope selection and pagination.
-   - Used with configured active states for candidate polling and terminal states for startup
-     cleanup.
+   - Used with configured active states for candidate polling.
    - When used for candidate polling, include active scoped issues even when
      `dispatchable=false`; the scheduler owns that final filter.
    - The orchestrator applies `required_labels`, `dispatchable`, claims, retries, and concurrency
@@ -1205,7 +1212,17 @@ An implementation MUST support these adapter operations:
    - IDs no longer visible in the configured scope are omitted; the orchestrator treats omission as
      "no longer visible" rather than inventing a synthetic state.
 
-Both operations return either `ok(list<Issue>)` or an adapter error. For portability, an adapter
+3. `fetch_issues_by_identifiers(identifiers)`
+   - Return current normalized issue snapshots for the supplied human-readable identifiers.
+   - Used for startup terminal workspace cleanup.
+   - Identifiers absent from a successful result are authoritatively missing from the tracker; an
+     adapter that cannot guarantee that semantics MUST return an error instead of a partial result.
+   - An empty `identifiers` list MUST return an empty result without a provider request.
+   - The adapter MUST also expose an `identifier_candidate?(identifier)` predicate telling whether
+     a string is shaped like one of its identifiers, so callers can distinguish "queried and
+     authoritatively missing" from "never queried".
+
+These operations return either `ok(list<Issue>)` or an adapter error. For portability, an adapter
 error SHOULD expose a stable category and human-readable message. An implementation MAY use a
 language-native tagged error, exception, tuple, or enum instead of a literal error object when its
 adapter profile documents how those public error forms map to category and message. The
@@ -1822,8 +1839,10 @@ function start_service():
     log_validation_error(validation)
     fail_startup(validation)
 
-  startup_terminal_workspace_cleanup()
   schedule_tick(delay_ms=0)
+  # Runs without blocking service start-up (for example the status dashboard),
+  # but completes before the first tick is processed (Section 8.1).
+  startup_terminal_workspace_cleanup()
 
   event_loop(state)
 ```
@@ -2106,6 +2125,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Candidate issue fetch applies configured active states and adapter-owned scope selection
 - Empty `fetch_issues_by_states([])` returns empty without a provider call
 - Empty `fetch_issues_by_ids([])` returns empty without a provider call
+- Empty `fetch_issues_by_identifiers([])` returns empty without a provider call
+- Identifier fetch treats absence from a successful result as authoritatively missing, and
+  `identifier_candidate?` tells identifier-shaped strings apart
 - Pagination preserves order across multiple pages
 - Labels are normalized to lowercase
 - Unusable optional provider metadata normalizes to null/empty without hiding valid required fields
@@ -2134,6 +2156,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Retry queue entries include attempt, due time, identifier, and error
 - Stall detection kills stalled sessions and schedules retry
 - Slot exhaustion requeues retries with explicit error reason
+- Startup terminal workspace cleanup enumerates leftover workspaces, removes only
+  tracker-confirmed terminal or missing identifiers, preserves non-identifier directory names,
+  and preserves everything when the fetch fails
 - If a snapshot API is implemented, it returns running rows, retry rows, token totals, and rate
   limits
 - If a snapshot API is implemented, timeout/unavailable cases are surfaced

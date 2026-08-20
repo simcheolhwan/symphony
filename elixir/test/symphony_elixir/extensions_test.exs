@@ -21,6 +21,33 @@ defmodule SymphonyElixir.ExtensionsTest do
     end
   end
 
+  # Reports tracker reads to the test process registered under
+  # :linear_client_listener, so calls made from the orchestrator process stay
+  # observable.
+  defmodule RecordingLinearClient do
+    def fetch_issues_by_states(states) do
+      notify({:linear_states_called, states})
+      {:ok, []}
+    end
+
+    def fetch_issues_by_ids(issue_ids) do
+      notify({:linear_ids_called, issue_ids})
+      {:ok, []}
+    end
+
+    def fetch_issues_by_identifiers(identifiers) do
+      notify({:linear_identifiers_called, identifiers})
+      {:ok, []}
+    end
+
+    defp notify(message) do
+      case Application.get_env(:symphony_elixir, :linear_client_listener) do
+        pid when is_pid(pid) -> send(pid, message)
+        _ -> :ok
+      end
+    end
+  end
+
   defmodule SlowOrchestrator do
     use GenServer
 
@@ -81,6 +108,57 @@ defmodule SymphonyElixir.ExtensionsTest do
     end)
 
     :ok
+  end
+
+  test "startup cleanup queries leftover workspace identifiers instead of terminal states" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-linear-startup-cleanup-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: test_root,
+        poll_interval_ms: 30_000
+      )
+
+      Application.put_env(:symphony_elixir, :linear_client_module, RecordingLinearClient)
+      Application.put_env(:symphony_elixir, :linear_client_listener, self())
+
+      leftover_workspace = Path.join(test_root, "MT-9")
+      unrecognized_workspace = Path.join(test_root, "MT_9--0123456789abcdef")
+      Enum.each([leftover_workspace, unrecognized_workspace], &File.mkdir_p!/1)
+
+      orchestrator_name = Module.concat(__MODULE__, :LinearStartupCleanupOrchestrator)
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :linear_client_listener)
+
+        if Process.alive?(pid) do
+          Process.exit(pid, :normal)
+        end
+      end)
+
+      assert %Orchestrator.State{} = :sys.get_state(pid)
+
+      assert_receive {:linear_identifiers_called, identifiers}
+      assert Enum.sort(identifiers) == ["MT-9", "MT_9--0123456789abcdef"]
+
+      # The successful empty result marks MT-9 as authoritatively missing, while
+      # the hash-suffixed name never parses as an identifier and stays put.
+      refute File.exists?(leftover_workspace)
+      assert File.exists?(unrecognized_workspace)
+
+      # The poll tick may fetch active states, but the startup path never
+      # queries by terminal states.
+      terminal_states = Config.settings!().tracker.terminal_states
+      refute_receive {:linear_states_called, ^terminal_states}, 200
+    after
+      Application.delete_env(:symphony_elixir, :linear_client_listener)
+      File.rm_rf(test_root)
+    end
   end
 
   test "workflow store reloads changes, keeps last good workflow, and falls back when stopped" do

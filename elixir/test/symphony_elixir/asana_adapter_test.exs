@@ -440,4 +440,17 @@ defmodule SymphonyElixir.Asana.AdapterTest do
       assert :ok = SymphonyElixir.WorkflowStore.force_reload()
     end
   end
+
+  test "adapter fetches issues by identifiers via numeric ids" do
+    Application.put_env(:symphony_elixir, :asana_client_module, FakeAsanaClient)
+
+    assert {:ok, ["123", "7"]} =
+             AsanaAdapter.fetch_issues_by_identifiers(["ASANA-123", "ASANA-7", "ASANA-x", "OTHER-1", "ASANA-"])
+
+    assert_receive {:asana_ids_called, ["123", "7"]}
+
+    assert AsanaAdapter.identifier_candidate?("ASANA-123")
+    refute AsanaAdapter.identifier_candidate?("ASANA-x")
+    refute AsanaAdapter.identifier_candidate?("OTHER-1")
+  end
 end

@@ -30,6 +30,25 @@ defmodule SymphonyElixir.Tracker.Memory do
      end)}
   end
 
+  @spec fetch_issues_by_identifiers([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_identifiers(identifiers) do
+    case Application.get_env(:symphony_elixir, :memory_tracker_fetch_error) do
+      nil ->
+        wanted_identifiers = MapSet.new(identifiers)
+
+        {:ok,
+         Enum.filter(issue_entries(), fn %Issue{identifier: identifier} ->
+           MapSet.member?(wanted_identifiers, identifier)
+         end)}
+
+      reason ->
+        {:error, reason}
+    end
+  end
+
+  @spec identifier_candidate?(String.t()) :: boolean()
+  def identifier_candidate?(identifier), do: is_binary(identifier) and identifier != ""
+
   @spec secret_environment_names(map()) :: [String.t()]
   def secret_environment_names(_tracker_settings), do: []
 
