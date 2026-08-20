@@ -148,6 +148,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:stop, {:missing_workflow_file, ^missing_path, :enoent}} = WorkflowStore.init([])
   end
 
+  @tag :timing
   test "workflow store start_link and poll callback cover missing-file error paths" do
     ensure_workflow_store_running()
     existing_path = Workflow.workflow_file_path()
