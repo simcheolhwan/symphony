@@ -13,8 +13,8 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 
 ## How it works
 
-1. Polls the configured tracker for candidate work (included adapters: Linear, GitHub Issues, Jira
-   Cloud, Asana, and GitLab)
+1. Polls the configured tracker for candidate work (included adapters: Linear, GitHub Issues,
+   GitHub PR Reviewer, GitHub PR Author, Jira Cloud, Asana, and GitLab)
 2. Creates a workspace per issue
 3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
    workspace
@@ -22,10 +22,10 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 5. Keeps Codex working on the issue until the work is done
 
 During app-server sessions, the selected tracker adapter may advertise provider-native tools. The
-Linear serves `linear_graphql`, GitHub Issues serves `github_api`, Jira Cloud serves
-`jira_rest`, Asana serves `asana_api`, and GitLab serves `gitlab_api`. Symphony executes those
-tools with configured host-side auth and removes declared tracker-token environment variables from
-the Codex child, so the agent does not need a second tracker login.
+Linear serves `linear_graphql`, the GitHub adapters serve `github_api`, Jira
+Cloud serves `jira_rest`, Asana serves `asana_api`, and GitLab serves `gitlab_api`. Symphony
+executes those tools with configured host-side auth and removes declared tracker-token environment
+variables from the Codex child, so the agent does not need a second tracker login.
 
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.
@@ -246,15 +246,81 @@ codex:
 
 - Config: use `tracker.kind: github` with required `tracker.provider.repo` in `owner/repo` form,
   optional `token` (defaults to `GITHUB_TOKEN` and accepts `$VAR`), and optional `api_url`
-  (default `https://api.github.com`, HTTPS only). Set explicit `active_states` and
+  (default `https://api.github.com`, HTTPS only). When no token resolves, Symphony uses the host's
+  active `gh auth` account for the configured GitHub host. Set explicit `active_states` and
   `terminal_states`; active entries may be `open` and terminal entries may be `closed`.
 - Reads and identity: polling is scoped to the configured repository; `issue.id` is the
   repository issue number, `issue.identifier` is `GH-<number>`, hidden or deleted `404` issues are
   omitted on refresh, and pull requests returned by the Issues API are not dispatchable.
 - Tool and auth: `github_api` accepts a relative REST `path` plus optional `params` and JSON
-  `body`; Symphony executes it host-side with the session-bound token, removes configured tracker
-  credentials and provider authentication aliases from the Codex child, and leaves raw tool access
-  limited by that token's GitHub permissions.
+  `body`; Symphony executes it host-side with the session-bound token or a token obtained from the
+  host's `gh` credential store, removes configured tracker credentials and provider authentication
+  aliases from the Codex child, and leaves raw tool access limited by the authenticated user's
+  GitHub permissions.
+- Errors: config validation fails with `:missing_github_repo`, `:invalid_github_repo`,
+  `:invalid_github_api_url`, or `:missing_github_token` (a `$VAR` token whose variable name is
+  invalid); reads fail with `:missing_github_auth` when neither a token nor a `gh` account
+  resolves, `:github_unknown_payload` for malformed provider payloads, and
+  `:invalid_github_issue_id` for non-numeric refresh IDs. Map config/auth errors to the portable
+  config/auth categories, unknown payloads to `tracker_response`, and HTTP failures to
+  `tracker_request`/`tracker_status` as in the Linear profile.
+
+### GitHub PR Reviewer adapter
+
+Only the following behavior differs from the GitHub Issues adapter:
+
+- Config: use `tracker.kind: github_pr_reviewer`.
+- Startup access: workflow loading verifies access to the configured repository before accepting
+  the settings. An initial access failure prevents Symphony from starting; a later workflow reload
+  failure keeps the last known good settings. Repository `401`, `403`, and `404` responses use
+  `{:github_repo_inaccessible, repo, status}`.
+- Reads and identity: polling is scoped to open pull requests directly requesting a review from the
+  authenticated user; `issue.id` is the repository pull request number and `issue.branch_name`
+  carries the head branch name.
+- Dispatchability: the adapter marks a pull request dispatchable only when it is not a draft, the
+  authenticated user has not submitted a review after the latest direct review request for that
+  user, and it has no Check Runs or only completed `success`, `neutral`, or `skipped` results. A
+  tracked pull request whose direct review request is removed or that otherwise becomes ineligible
+  is returned with `dispatchable: false` rather than omitted on refresh.
+- Identity metadata: `issue.native_ref` carries the pull request's `merged` flag, `author` login,
+  and `head_sha` for provider-native tools and notification labeling.
+- Per-pull-request isolation: when the extra reads that decide dispatchability fail for one pull
+  request during a candidate poll, only that pull request is dropped with a logged warning. List
+  and page read failures still fail the whole poll, and the same per-pull-request failure during
+  an ID refresh fails the whole call.
+
+### GitHub PR Author adapter
+
+Only the following behavior differs from the GitHub PR Reviewer adapter:
+
+- Config: use `tracker.kind: github_pr_author`.
+- Reads and identity: polling is scoped to open pull requests (drafts included) authored by the
+  authenticated user.
+- Dispatchability: a pull request first requires every Check Run on its current head to be
+  completed (no Check Runs pass the gate); while any run is in progress the pull request stays
+  `dispatchable: false`. It then becomes dispatchable when at least one reason holds:
+  an unresolved review thread whose last comment is not by the authenticated user, a Check Run
+  that completed with a conclusion other than `success`, `neutral`, or `skipped` and no
+  authenticated-user activity after its completion, a `CHANGES_REQUESTED` review without inline
+  comments submitted against the current head with no authenticated-user activity after its
+  submission, or a non-bot reviewer whose latest review no longer targets the current head and who
+  is absent from the current review requests. Authenticated-user activity is a pull request
+  conversation comment or a review (thread replies submit one). A push does not count as activity:
+  it erases head-bound reasons by changing the head, except that a review with no recorded commit
+  always counts as targeting the current head.
+- Dispatch reasons: each reason is also emitted as a code in `issue.dispatch_reasons` —
+  `unresolved_threads:<N>`, `failing_checks:<N>`, `changes_requested`, and
+  `review_rerequest_pending`.
+- Convergence marker: a pull request with no dispatch reasons, no failing check completions, no
+  unresolved threads, and a non-bot approval targeting the current head gets
+  `native_ref["converged"] = true` together with that `head_sha`; a push invalidates it. This
+  marker drives the once-per-head mergeable notification.
+- Convergence contract: the dispatched agent must leave an observable GitHub response for every
+  dispatch reason — a reply on each unresolved thread (including nitpicks, rejections, and
+  blockers), a conversation comment for CI failures it decides not to fix, a fix push or a
+  conversation comment for thread-less `CHANGES_REQUESTED` reviews, and a review re-request for
+  reviewers whose review predates the current head. A reason left without a response keeps the
+  pull request dispatchable on every poll and re-runs the agent in a loop.
 
 ### Jira Cloud adapter
 

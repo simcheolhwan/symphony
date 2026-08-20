@@ -193,6 +193,11 @@ Fields:
   - REQUIRED adapter-derived eligibility for provider-specific rules that the generic scheduler
     cannot infer safely, such as assignment, board membership, or blocker semantics.
   - The orchestrator still applies configured state, label, claim, retry, and concurrency rules.
+- `dispatch_reasons` (list of strings)
+  - OPTIONAL adapter-defined codes naming the observations that made the issue dispatchable (for
+    example unresolved feedback or failing checks). Best-effort metadata with an empty default;
+    core scheduling never branches on it, but observability extensions MAY carry it (Section
+    13.8).
 - `created_at` (timestamp or null)
 - `updated_at` (timestamp or null)
 
@@ -574,6 +579,9 @@ Dynamic reload is REQUIRED:
   require restart unless the implementation explicitly supports live rebind.
 - Implementations SHOULD also re-validate/reload defensively during runtime operations (for example
   before dispatch) in case filesystem watch events are missed.
+- Between reload points, configuration reads MAY serve the last loaded snapshot instead of
+  re-reading the file; a per-tick dispatch preflight that re-reads the workflow satisfies the
+  defensive reload requirement.
 - Invalid reloads MUST NOT crash the service; keep operating with the last known good effective
   configuration and emit an operator-visible error.
 
@@ -600,6 +608,8 @@ Validation checks:
 - `tracker.kind` is present and supported.
 - The selected adapter accepts `tracker.provider` after documented defaults and `$VAR`
   resolution.
+- If the selected adapter implements the OPTIONAL `preflight` operation (Section 11.1), it
+  passes.
 - `codex.command` is present and non-empty.
 
 ### 6.4 Core Config Fields Summary (Cheat Sheet)
@@ -1222,15 +1232,23 @@ An implementation MUST support these adapter operations:
      a string is shaped like one of its identifiers, so callers can distinguish "queried and
      authoritatively missing" from "never queried".
 
+4. `preflight()` (OPTIONAL)
+   - An adapter MAY implement a preflight check that verifies its effective configuration against
+     the live provider (for example authentication and scope visibility) before scheduling starts.
+   - When implemented, workflow load runs it as its final step; a failure fails startup, and on
+     reload it keeps the last known good effective configuration like any other validation error
+     (Section 6.3).
+
 These operations return either `ok(list<Issue>)` or an adapter error. For portability, an adapter
 error SHOULD expose a stable category and human-readable message. An implementation MAY use a
 language-native tagged error, exception, tuple, or enum instead of a literal error object when its
 adapter profile documents how those public error forms map to category and message. The
 orchestrator relies only on success versus failure.
 
-The operations are atomic from the scheduler's perspective after a paging or transport failure. For
-these rules, a record is malformed only when the adapter cannot produce the required normalized
-fields (`id`, `identifier`, `title`, `state`, and explicit `dispatchable`) or cannot produce a
+A paging or transport failure of the list, page, or ID request itself fails the whole operation;
+the scheduler never sees a partial result from such a failure. For these rules, a record is
+malformed only when the adapter cannot produce the required normalized fields (`id`,
+`identifier`, `title`, `state`, and explicit `dispatchable`) or cannot produce a
 valid `Issue` after applying the optional-field fallback rules in Section 11.3. Unusable nullable
 or best-effort provider metadata MAY normalize to `null`, an empty list, or omitted best-effort
 entries; that fallback alone does not make a record malformed.
@@ -1240,6 +1258,13 @@ dispatch, and SHOULD log that omission. An ID-refresh call MUST fail instead of 
 malformed requested record, because omission is meaningful. A successful
 `fetch_issues_by_ids` result is complete for that call. Output order is not significant, input IDs
 are treated as a set, and each dispatch ID appears at most once.
+
+An adapter whose provider cannot report dispatchability in the list payload MAY derive
+`dispatchable` through additional per-issue provider requests (dispatchability enrichment). When
+such a per-issue request fails during a state-list call, the adapter MAY omit only that issue and
+SHOULD log the omission; failing the whole poll would starve every other issue until the broken
+one changes. During an ID-based fetch the same failure MUST fail the whole call instead of
+omitting the record, preserving the completeness of a successful `fetch_issues_by_ids` result.
 
 The refresh operation returns full normalized snapshots, not only state strings, because label,
 assignment, routing, and provider-specific dispatchability can change while a run is active.
@@ -2129,11 +2154,18 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Empty `fetch_issues_by_identifiers([])` returns empty without a provider call
 - Identifier fetch treats absence from a successful result as authoritatively missing, and
   `identifier_candidate?` tells identifier-shaped strings apart
+- If an adapter preflight is implemented, a preflight failure fails workflow load
+- If dispatch reasons are implemented, the adapter emits its documented reason codes alongside
+  `dispatchable`
 - Pagination preserves order across multiple pages
 - Labels are normalized to lowercase
 - Unusable optional provider metadata normalizes to null/empty without hiding valid required fields
 - State-list reads log omitted malformed required records; ID refresh fails malformed requested
   records instead of treating them as invisible
+- If dispatchability enrichment is implemented, a per-issue enrichment failure during a state-list
+  read drops only that issue with a logged warning and the call still succeeds
+- If dispatchability enrichment is implemented, a per-issue enrichment failure during an ID
+  refresh fails the whole call
 - Refresh by opaque dispatch ID returns full normalized issue snapshots
 - A distinct provider ticket ID or project-item ID is preserved in `native_ref` when needed
 - Provider-specific routing/blocker/assignment rules become explicit `dispatchable`

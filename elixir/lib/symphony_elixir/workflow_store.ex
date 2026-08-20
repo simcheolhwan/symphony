@@ -6,7 +6,7 @@ defmodule SymphonyElixir.WorkflowStore do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.Config
+  alias SymphonyElixir.{Config, Tracker}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Workflow
 
@@ -23,11 +23,16 @@ defmodule SymphonyElixir.WorkflowStore do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  # Reloading runs the tracker preflight, a network request that can outlive
+  # the default call timeout. Callers wait instead of exiting: an exit here
+  # would take down the orchestrator or dashboard over a slow config check.
+  @call_timeout :infinity
+
   @spec current() :: {:ok, Workflow.loaded_workflow()} | {:error, term()}
   def current do
     case Process.whereis(__MODULE__) do
       pid when is_pid(pid) ->
-        GenServer.call(__MODULE__, :current)
+        GenServer.call(__MODULE__, :current, @call_timeout)
 
       _ ->
         Workflow.load()
@@ -38,7 +43,7 @@ defmodule SymphonyElixir.WorkflowStore do
   def settings do
     case Process.whereis(__MODULE__) do
       pid when is_pid(pid) ->
-        GenServer.call(__MODULE__, :settings)
+        GenServer.call(__MODULE__, :settings, @call_timeout)
 
       _ ->
         case load_state(Workflow.workflow_file_path()) do
@@ -52,7 +57,7 @@ defmodule SymphonyElixir.WorkflowStore do
   def force_reload do
     case Process.whereis(__MODULE__) do
       pid when is_pid(pid) ->
-        GenServer.call(__MODULE__, :force_reload)
+        GenServer.call(__MODULE__, :force_reload, @call_timeout)
 
       _ ->
         case load_state(Workflow.workflow_file_path()) do
@@ -74,15 +79,12 @@ defmodule SymphonyElixir.WorkflowStore do
     end
   end
 
+  # Reads serve the cached state without reloading: a reload can block on the
+  # tracker preflight, and the 1s poll plus explicit force_reload calls already
+  # pick up file changes.
   @impl true
   def handle_call(:current, _from, %State{} = state) do
-    case reload_state(state) do
-      {:ok, new_state} ->
-        {:reply, {:ok, new_state.workflow}, new_state}
-
-      {:error, _reason, new_state} ->
-        {:reply, {:ok, new_state.workflow}, new_state}
-    end
+    {:reply, {:ok, state.workflow}, state}
   end
 
   def handle_call(:force_reload, _from, %State{} = state) do
@@ -96,13 +98,7 @@ defmodule SymphonyElixir.WorkflowStore do
   end
 
   def handle_call(:settings, _from, %State{} = state) do
-    case reload_state(state) do
-      {:ok, new_state} ->
-        {:reply, {:ok, new_state.settings}, new_state}
-
-      {:error, _reason, new_state} ->
-        {:reply, {:ok, new_state.settings}, new_state}
-    end
+    {:reply, {:ok, state.settings}, state}
   end
 
   @impl true
@@ -155,10 +151,12 @@ defmodule SymphonyElixir.WorkflowStore do
   end
 
   defp load_state(path) do
+    # Capture the stamp before remote preflight so edits made during the request remain detectable.
     with {:ok, workflow} <- Workflow.load(path),
          {:ok, settings} <- Schema.parse(workflow.config),
          :ok <- Config.validate_settings(settings),
-         {:ok, stamp} <- current_stamp(path) do
+         {:ok, stamp} <- current_stamp(path),
+         :ok <- Tracker.preflight(settings.tracker) do
       {:ok, %State{path: path, stamp: stamp, workflow: workflow, settings: settings}}
     else
       {:error, reason} ->

@@ -14,8 +14,99 @@ defmodule SymphonyElixir.GitHub.Client do
 
   @spec validate_settings(map()) :: :ok | {:error, term()}
   def validate_settings(tracker_settings) do
-    with {:ok, _settings} <- settings(tracker_settings), do: :ok
+    with {:ok, _settings} <- resolve_settings(tracker_settings), do: :ok
   end
+
+  @spec preflight(map()) :: :ok | {:error, term()}
+  def preflight(tracker_settings) when is_map(tracker_settings) do
+    preflight(tracker_settings, &perform_request/5)
+  end
+
+  @doc false
+  @spec preflight_for_test(map(), function()) :: :ok | {:error, term()}
+  def preflight_for_test(tracker_settings, request_fun)
+      when is_map(tracker_settings) and is_function(request_fun, 5) do
+    preflight(tracker_settings, request_fun)
+  end
+
+  @doc false
+  @spec resolve_settings(map()) :: {:ok, map()} | {:error, term()}
+  def resolve_settings(tracker_settings) when is_map(tracker_settings) do
+    resolve_settings(tracker_settings, &gh_auth_token/1)
+  end
+
+  @doc false
+  @spec resolve_settings_for_test(map(), function()) :: {:ok, map()} | {:error, term()}
+  def resolve_settings_for_test(tracker_settings, gh_token_fun)
+      when is_map(tracker_settings) and is_function(gh_token_fun, 1) do
+    resolve_settings(tracker_settings, gh_token_fun)
+  end
+
+  defp resolve_settings(tracker_settings, gh_token_fun) do
+    provider = provider_settings(tracker_settings)
+    api_url = provider["api_url"] || @default_api_url
+    repo = resolve_setting(provider["repo"], System.get_env("GITHUB_REPO"))
+
+    cond do
+      not valid_api_url?(api_url) -> {:error, :invalid_github_api_url}
+      not present_string?(repo) -> {:error, :missing_github_repo}
+      not valid_repo?(repo) -> {:error, :invalid_github_repo}
+      not valid_token_setting?(provider["token"]) -> {:error, :missing_github_token}
+      true -> build_settings(api_url, repo, provider["token"], gh_token_fun)
+    end
+  end
+
+  defp preflight(tracker_settings, request_fun) do
+    with {:ok, settings} <- resolve_settings(tracker_settings) do
+      check_repository_access(settings, request_fun)
+    end
+  end
+
+  defp check_repository_access(settings, request_fun) do
+    case read(repository_path(settings.repo), %{}, settings, request_fun: request_fun) do
+      {:ok, payload} when is_map(payload) ->
+        :ok
+
+      {:ok, _payload} ->
+        {:error, :github_unknown_payload}
+
+      {:error, {:github_api_status, status}} when status in [401, 403, 404] ->
+        {:error, {:github_repo_inaccessible, settings.repo, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc false
+  @spec read(String.t(), map(), map(), keyword()) :: {:ok, term()} | {:error, term()}
+  def read(path, params, github_settings, opts \\ [])
+      when is_binary(path) and is_map(params) and is_map(github_settings) and is_list(opts) do
+    request_fun = Keyword.get(opts, :request_fun, &perform_request/5)
+    allow_not_found = Keyword.get(opts, :allow_not_found, false)
+
+    request_with_settings(
+      "GET",
+      path,
+      params,
+      nil,
+      github_settings,
+      request_fun,
+      allow_not_found
+    )
+  end
+
+  @doc false
+  @spec post(String.t(), term(), map(), keyword()) :: {:ok, term()} | {:error, term()}
+  def post(path, body, github_settings, opts \\ [])
+      when is_binary(path) and is_map(github_settings) and is_list(opts) do
+    request_fun = Keyword.get(opts, :request_fun, &perform_request/5)
+    request_with_settings("POST", path, %{}, body, github_settings, request_fun, false)
+  end
+
+  @doc false
+  @spec repository_path(String.t()) :: String.t()
+  def repository_path(repo) when is_binary(repo), do: "/repos/#{encoded_repo(repo)}"
 
   @spec secret_environment_names(map()) :: [String.t()]
   def secret_environment_names(tracker_settings) do
@@ -47,7 +138,7 @@ defmodule SymphonyElixir.GitHub.Client do
     tracker_settings = Keyword.get_lazy(opts, :tracker_settings, fn -> Config.settings!().tracker end)
     request_fun = Keyword.get(opts, :request_fun, &perform_request/5)
 
-    with {:ok, github_settings} <- settings(tracker_settings) do
+    with {:ok, github_settings} <- resolve_settings(tracker_settings) do
       request_fun.(method, path, params, body, github_settings)
     end
   end
@@ -82,7 +173,7 @@ defmodule SymphonyElixir.GitHub.Client do
         {:ok, []}
 
       state_query ->
-        with {:ok, github_settings} <- settings(tracker_settings) do
+        with {:ok, github_settings} <- resolve_settings(tracker_settings) do
           do_fetch_pages(github_settings, state_query, normalized_states, 1, request_fun, [])
         end
     end
@@ -96,7 +187,7 @@ defmodule SymphonyElixir.GitHub.Client do
         {:ok, []}
 
       ids ->
-        with {:ok, github_settings} <- settings(tracker_settings) do
+        with {:ok, github_settings} <- resolve_settings(tracker_settings) do
           fetch_issue_ids(ids, github_settings, request_fun, [])
         end
     end
@@ -179,7 +270,9 @@ defmodule SymphonyElixir.GitHub.Client do
     |> Enum.filter(&MapSet.member?(requested_states, normalize_state(&1.state)))
   end
 
-  defp normalize_issue(issue, repo) when is_map(issue) and is_binary(repo) do
+  @doc false
+  @spec normalize_issue(map(), String.t()) :: Issue.t() | nil
+  def normalize_issue(issue, repo) when is_map(issue) and is_binary(repo) do
     issue_number = issue["number"]
     state = issue["state"]
 
@@ -203,7 +296,7 @@ defmodule SymphonyElixir.GitHub.Client do
     end
   end
 
-  defp normalize_issue(_issue, _repo), do: nil
+  def normalize_issue(_issue, _repo), do: nil
 
   defp native_ref(issue, repo) do
     %{
@@ -282,18 +375,61 @@ defmodule SymphonyElixir.GitHub.Client do
     end
   end
 
-  defp settings(tracker_settings) when is_map(tracker_settings) do
-    provider = provider_settings(tracker_settings)
-    api_url = provider["api_url"] || @default_api_url
-    repo = resolve_setting(provider["repo"], System.get_env("GITHUB_REPO"))
-    token = resolve_setting(provider["token"], System.get_env("GITHUB_TOKEN"))
+  defp build_settings(api_url, repo, token_setting, gh_token_fun) do
+    api_url = String.trim_trailing(api_url, "/")
 
-    cond do
-      not valid_api_url?(api_url) -> {:error, :invalid_github_api_url}
-      not present_string?(repo) -> {:error, :missing_github_repo}
-      not valid_repo?(repo) -> {:error, :invalid_github_repo}
-      not present_string?(token) -> {:error, :missing_github_token}
-      true -> {:ok, %{api_url: String.trim_trailing(api_url, "/"), repo: repo, token: token}}
+    with {:ok, token} <- resolve_auth_token(token_setting, api_url, gh_token_fun) do
+      {:ok, %{api_url: api_url, repo: repo, token: token}}
+    end
+  end
+
+  defp resolve_auth_token(token_setting, api_url, gh_token_fun) do
+    case resolve_setting(token_setting, System.get_env("GITHUB_TOKEN")) do
+      token when is_binary(token) ->
+        {:ok, token}
+
+      nil ->
+        api_url
+        |> github_hostname()
+        |> gh_token_fun.()
+        |> normalize_gh_token()
+    end
+  end
+
+  defp normalize_gh_token({:ok, token}) do
+    case normalize_string(token) do
+      nil -> {:error, :missing_github_auth}
+      token -> {:ok, token}
+    end
+  end
+
+  defp normalize_gh_token({:error, reason}), do: {:error, reason}
+  defp normalize_gh_token(_result), do: {:error, :missing_github_auth}
+
+  defp gh_auth_token(hostname) do
+    case System.find_executable("gh") do
+      nil ->
+        {:error, :missing_github_auth}
+
+      executable ->
+        case System.cmd(
+               executable,
+               ["auth", "token", "--hostname", hostname],
+               env: [{"GH_PROMPT_DISABLED", "1"}],
+               stderr_to_stdout: true
+             ) do
+          {token, 0} -> {:ok, token}
+          {_output, _status} -> {:error, :missing_github_auth}
+        end
+    end
+  rescue
+    ErlangError -> {:error, :missing_github_auth}
+  end
+
+  defp github_hostname(api_url) do
+    case URI.parse(api_url).host do
+      "api.github.com" -> "github.com"
+      hostname -> hostname
     end
   end
 
@@ -341,7 +477,15 @@ defmodule SymphonyElixir.GitHub.Client do
   defp valid_repo?(repo) when is_binary(repo), do: String.match?(repo, ~r/^[^\s\/]+\/[^\s\/]+$/)
   defp valid_repo?(_repo), do: false
 
-  defp repository_issues_path(settings), do: "/repos/#{encoded_repo(settings.repo)}/issues"
+  defp valid_token_setting?(nil), do: true
+
+  defp valid_token_setting?("$" <> env_name),
+    do: valid_env_name?(env_name)
+
+  defp valid_token_setting?(value) when is_binary(value), do: true
+  defp valid_token_setting?(_value), do: false
+
+  defp repository_issues_path(settings), do: "#{repository_path(settings.repo)}/issues"
 
   defp repository_issue_path(settings, issue_number),
     do: "#{repository_issues_path(settings)}/#{issue_number}"
