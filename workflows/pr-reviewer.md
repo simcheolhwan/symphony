@@ -13,7 +13,7 @@ agent:
   max_concurrent_agents: 3
   max_turns: 3
 codex:
-  command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=xhigh --config approvals_reviewer=auto_review app-server
+  command: codex ${SYMPHONY_MODEL:+--model="$SYMPHONY_MODEL"} --config shell_environment_policy.inherit=all --config model_reasoning_effort="${SYMPHONY_MODEL_REASONING_EFFORT:-xhigh}" --config approvals_reviewer=auto_review app-server
   approval_policy: never
   turn_sandbox_policy:
     type: workspaceWrite
