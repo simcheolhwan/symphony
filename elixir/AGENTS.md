@@ -72,5 +72,7 @@ mix pr_body.check --file /path/to/pr_body.md
 If behavior/config changes, update docs in the same PR:
 
 - `../README.md` for project concept and goals.
+- `../SPEC.md` for orchestrator/adapter behavior contract changes, including its reference
+  algorithms and test matrix.
 - `README.md` for Elixir implementation and run instructions.
 - `WORKFLOW.md` for workflow/config contract changes.
