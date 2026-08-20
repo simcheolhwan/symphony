@@ -3,6 +3,8 @@ import { join } from "node:path"
 import { PROCESS_PREFIX, REGISTRY_PATH, ROOT } from "./constants.mts"
 import { isRecord } from "./guards.mts"
 
+const DEFAULT_EFFORT = "xhigh"
+
 export const WORKFLOW_NAMES = ["linear", "pr-reviewer", "pr-author"] as const
 export type WorkflowName = (typeof WORKFLOW_NAMES)[number]
 
@@ -16,6 +18,8 @@ const WORKFLOW_LABELS: Readonly<Record<WorkflowName, string>> = {
 interface InstanceFields {
   alias: string
   repo: string
+  model: string | undefined
+  effort: string
 }
 
 export type Instance =
@@ -113,6 +117,8 @@ const parseTarget = (alias: string, value: unknown): Target => {
     const fields: InstanceFields = {
       alias,
       repo,
+      model: optionalString(config, "model", context),
+      effort: optionalString(config, "model_reasoning_effort", context) ?? DEFAULT_EFFORT,
     }
     if (name === "linear") {
       if (project === undefined) {

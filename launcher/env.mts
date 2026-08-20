@@ -54,9 +54,14 @@ export const buildEnv = (
     // 알림 본문이 워크플로와 대상을 따로 표시하므로 조립된 인스턴스 이름과 별개로 넘긴다.
     SYMPHONY_WORKFLOW_LABEL: workflowLabel(instance.workflow),
     SYMPHONY_TARGET_NAME: instance.alias,
+    SYMPHONY_MODEL_REASONING_EFFORT: instance.effort,
   }
   if (instance.workflow === "linear") {
     env["LINEAR_PROJECT_SLUG"] = instance.project
+  }
+  // 워크플로가 `${SYMPHONY_MODEL:+...}`로 분기하므로 미지정 모델은 빈 값 대신 생략한다.
+  if (instance.model !== undefined) {
+    env["SYMPHONY_MODEL"] = instance.model
   }
   return withCurrentPath(env)
 }

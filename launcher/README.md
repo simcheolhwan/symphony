@@ -50,7 +50,7 @@ symphonyctl notifier start|stop|restart|logs
     "repo": "acme/myrepo",
     "project": "59eaa65d2863",
     "workflows": {
-      "linear": {},
+      "linear": { "model": "gpt-5.6-terra", "model_reasoning_effort": "max" },
       "pr-author": {},
       "pr-reviewer": {}
     }
@@ -63,6 +63,8 @@ symphonyctl notifier start|stop|restart|logs
 | `repo` | 대상 GitHub 저장소 (`owner/name`) |
 | `project` | Linear 프로젝트 슬러그. `linear` 워크플로를 켰으면 필수 |
 | `workflows.<이름>` | 켤 워크플로. `linear`, `pr-author`, `pr-reviewer` 중에서 고른다 |
+| `workflows.<이름>.model` | 에이전트 모델. 생략하면 주입하지 않아 워크플로 기본값을 쓴다 |
+| `workflows.<이름>.model_reasoning_effort` | 추론 수준. 기본 `xhigh` |
 
 ## 주입 환경변수
 
@@ -72,6 +74,8 @@ symphonyctl notifier start|stop|restart|logs
 | --- | --- |
 | `GITHUB_REPO` | target의 `repo` |
 | `LINEAR_PROJECT_SLUG` | target의 `project` (`linear` 워크플로만) |
+| `SYMPHONY_MODEL` | 워크플로 설정의 `model` (지정했을 때만) |
+| `SYMPHONY_MODEL_REASONING_EFFORT` | 워크플로 설정의 `model_reasoning_effort` |
 | `SYMPHONY_WORKSPACE_ROOT` | `~/.symphony/<별칭>-<워크플로>` |
 | `SYMPHONY_INSTANCE_NAME` | 알림 스레드를 인스턴스별로 가르는 이름 (예: `Linear · myrepo`) |
 | `SYMPHONY_WORKFLOW_LABEL` | 알림 본문에 표시하는 워크플로 레이블 |
