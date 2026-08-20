@@ -76,6 +76,7 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  @tag :timing
   test "turn timeout resets on stream updates and fires after silence" do
     test_root =
       Path.join(
