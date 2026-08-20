@@ -398,7 +398,7 @@ defmodule SymphonyElixir.Config.Schema do
   defp finalize_settings(settings) do
     provider = normalize_optional_map(settings.tracker.provider) || %{}
 
-    {api_key, assignee, provider, secret_environment_names} =
+    {api_key, assignee, project_slug, provider, secret_environment_names} =
       case settings.tracker.kind do
         "linear" ->
           linear_provider =
@@ -414,15 +414,19 @@ defmodule SymphonyElixir.Config.Schema do
           resolved_assignee =
             resolve_secret_setting(linear_provider["assignee"], System.get_env("LINEAR_ASSIGNEE"))
 
+          resolved_project_slug =
+            resolve_string_setting(linear_provider["project_slug"], System.get_env("LINEAR_PROJECT_SLUG"))
+
           {
             resolved_api_key,
             resolved_assignee,
+            resolved_project_slug,
             linear_provider,
             ["LINEAR_API_KEY" | env_reference_names([linear_provider["api_key"]])]
           }
 
         _ ->
-          {settings.tracker.api_key, settings.tracker.assignee, provider, []}
+          {settings.tracker.api_key, settings.tracker.assignee, settings.tracker.project_slug, provider, []}
       end
 
     {active_states, terminal_states} =
@@ -441,7 +445,7 @@ defmodule SymphonyElixir.Config.Schema do
       settings.tracker
       | endpoint: Map.get(provider, "endpoint", settings.tracker.endpoint),
         api_key: api_key,
-        project_slug: Map.get(provider, "project_slug", settings.tracker.project_slug),
+        project_slug: project_slug,
         assignee: assignee,
         provider: provider,
         secret_environment_names: Enum.uniq(secret_environment_names),
@@ -500,6 +504,16 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp resolve_secret_setting(value, _fallback), do: value
+
+  defp resolve_string_setting(nil, fallback), do: normalize_string_value(fallback)
+
+  defp resolve_string_setting(value, fallback) when is_binary(value) do
+    value
+    |> resolve_env_value(fallback)
+    |> normalize_string_value()
+  end
+
+  defp resolve_string_setting(value, _fallback), do: value
 
   defp resolve_path_value(value, default) when is_binary(value) do
     case normalize_path_token(value) do
@@ -566,6 +580,15 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp normalize_secret_value(_value), do: nil
+
+  defp normalize_string_value(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_string_value(value), do: value
 
   defp default_turn_sandbox_policy(workspace) do
     %{
