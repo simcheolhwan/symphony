@@ -550,7 +550,10 @@ Configuration is resolved in this order:
 
 Environment variables do not globally override YAML values. They are used only when a config value
 explicitly references them, or when an adapter profile documents a host-side fallback for an
-omitted provider field. Such a fallback is adapter-local, not a cross-provider convention.
+omitted provider field. Such a fallback is adapter-local, not a cross-provider convention. An
+OPTIONAL observability extension (Section 13.8) MAY also be configured through
+implementation-documented host environment variables with no YAML counterpart; those variables
+configure how the host reports events, never how work is scheduled.
 
 Value coercion semantics:
 
@@ -682,6 +685,9 @@ Important nuance:
 - Once the worker exits normally, the orchestrator still schedules a short continuation retry
   (about 1 second) so it can re-check whether the issue remains active and needs another worker
   session.
+- Exception: if the session was marked draining (Section 8.5), a normal exit completes the issue
+  and releases the claim without scheduling a continuation retry, because the issue was already
+  observed to have no routing left.
 
 ### 7.2 Run Attempt Lifecycle
 
@@ -714,6 +720,8 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - Update aggregate runtime totals.
   - Schedule continuation retry (attempt `1`) after the worker exhausts or finishes its in-process
     turn loop.
+  - If the running entry was marked draining (Section 8.5), release the claim instead of
+    scheduling the continuation retry.
 
 - `Worker Exit (abnormal)`
   - Remove running entry.
@@ -728,6 +736,8 @@ Distinct terminal reasons are important because retry logic and logs differ.
 
 - `Reconciliation State Refresh`
   - Stop runs whose issue states are terminal or no longer active.
+  - On a pull-request tracker, mark non-terminal runs that lost routing as draining instead of
+    stopping them (Section 8.5).
 
 - `Stall Timeout`
   - Kill worker and schedule retry.
@@ -809,7 +819,8 @@ Retry entry creation:
 
 Backoff formula:
 
-- Normal continuation retries after a clean worker exit use a short fixed delay of `1000` ms.
+- Normal continuation retries after a clean worker exit use a short fixed delay of `1000` ms. A
+  drained session's clean exit schedules no continuation retry (Section 8.5).
 - Failure-driven retries use `delay = min(10000 * 2^(attempt - 1), agent.max_retry_backoff_ms)`.
 - Power is capped by the configured max retry backoff (default `300000` / 5m).
 
@@ -844,12 +855,36 @@ Part A: Stall detection
 Part B: Tracker state refresh
 
 - Fetch current issue states for all running issue IDs.
-- For each running issue:
+- For each running issue, evaluate in order:
   - If tracker state is terminal: terminate worker and clean workspace.
-  - If tracker state is still active and routable: update the in-memory issue snapshot.
-  - If tracker state is active but no longer routable: terminate worker without workspace cleanup.
-  - If tracker state is neither active nor terminal: terminate worker without workspace cleanup.
+  - If the issue is no longer routable (Section 8.2):
+    - On a pull-request tracker, mark the running entry as draining instead of terminating it.
+    - On any other tracker, terminate worker without workspace cleanup.
+  - If tracker state is still active: update the in-memory issue snapshot and clear any draining
+    mark, returning the run to the normal flow.
+  - Otherwise (state neither active nor terminal): terminate worker without workspace cleanup.
+- A running issue missing from a successful refresh is terminated without workspace cleanup;
+  draining never applies to it.
 - If state refresh fails, keep workers running and try again on the next tick.
+
+Draining semantics:
+
+- Draining is a marker on the running entry. The session keeps running, the issue stays in
+  `running` and `claimed`, keeps occupying a concurrency slot, and cannot be re-dispatched.
+- Observing the same unroutable issue again while draining is idempotent.
+- When a drained session exits normally, the orchestrator records the issue as completed and
+  releases the claim without scheduling a continuation retry; the issue was already observed to
+  have no routing left, so a continuation check would only rediscover that.
+- Draining does not exempt the session from stall detection or from abnormal-exit retry handling.
+- Whether a tracker kind is a pull-request tracker is a fixed classification owned by the
+  orchestrator implementation. If the classification cannot be determined, the immediate-stop
+  path is used.
+
+Rationale: on a pull-request tracker the agent's own converging action (submitting a review,
+pushing a fix) can clear the very routing reason that dispatched the pull request, and polling can
+observe that while the session is still writing its wrap-up. Killing the session there would lose
+the completion event carrying the agent's final message. Anywhere else, losing routing means the
+work was taken away from this worker, which stops the agent at once.
 
 ### 8.6 Startup Terminal Workspace Cleanup
 
@@ -1247,8 +1282,7 @@ orchestrator relies only on success versus failure.
 
 A paging or transport failure of the list, page, or ID request itself fails the whole operation;
 the scheduler never sees a partial result from such a failure. For these rules, a record is
-malformed only when the adapter cannot produce the required normalized fields (`id`,
-`identifier`, `title`, `state`, and explicit `dispatchable`) or cannot produce a
+malformed only when the adapter cannot produce the required normalized fields (`id`, `identifier`, `title`, `state`, and explicit `dispatchable`) or cannot produce a
 valid `Issue` after applying the optional-field fallback rules in Section 11.3. Unusable nullable
 or best-effort provider metadata MAY normalize to `null`, an empty list, or omitted best-effort
 entries; that fallback alone does not make a record malformed.
@@ -1284,6 +1318,10 @@ Each adapter owns:
 
 The orchestrator MUST NOT inspect provider payloads, assume that `issue.id` is an underlying
 ticket ID, or branch on provider-specific blocker, board, transition, or comment semantics.
+Exception: the OPTIONAL notification extension (Section 13.8) MAY read `native_ref` keys the
+adapter profile documents for event classification (for example whether a pull request was merged,
+or which head commit a converged pull request points at); scheduling decisions still never branch
+on `native_ref`.
 
 Each adapter MUST publish a compact profile in implementation documentation, not only code,
 containing:
@@ -1673,6 +1711,25 @@ API design notes:
 - If the dashboard is a client-side app, it SHOULD consume this API rather than duplicating state
   logic.
 
+### 13.8 OPTIONAL Notification Extension
+
+An implementation MAY post issue lifecycle events (dispatch, retry, block, kill, completion,
+settle, and similar transitions) to a configured HTTP endpoint so operators can follow work
+without watching the tracker.
+
+If implemented:
+
+- Configuration comes from implementation-documented host environment variables (Section 6.1).
+  When no endpoint is configured, the extension is fully disabled.
+- Delivery is fire-and-forget: events post outside the orchestration transition that produced
+  them, failures are only logged, and delivery problems MUST NOT stall, crash, or reorder
+  scheduling decisions.
+- Notifications are an observability surface. The tracker remains the source of truth for work
+  state, and consumers MUST tolerate lost or duplicate events.
+- Events MAY carry adapter-provided context such as `dispatch_reasons` and the `native_ref` keys
+  documented for event classification (Section 11.2). The payload schema and receiver are
+  implementation-defined.
+
 ## 14. Failure Model and Recovery Strategy
 
 ### 14.1 Failure Classes
@@ -1922,8 +1979,15 @@ function reconcile_running_issues(state):
   for issue in refreshed:
     if issue.state in terminal_states:
       state = terminate_running_issue(state, issue.id, cleanup_workspace=true)
-    else if issue.state in active_states and issue_routable(issue):
+    else if not issue_routable(issue):
+      if is_pull_request_tracker():
+        state.running[issue.id].issue = issue
+        state.running[issue.id].draining = true
+      else:
+        state = terminate_running_issue(state, issue.id, cleanup_workspace=false)
+    else if issue.state in active_states:
       state.running[issue.id].issue = issue
+      state.running[issue.id].draining = false
     else:
       state = terminate_running_issue(state, issue.id, cleanup_workspace=false)
 
@@ -2045,10 +2109,13 @@ on_worker_exit(issue_id, reason, state):
 
   if reason == normal:
     state.completed.add(issue_id)  # bookkeeping only
-    state = schedule_retry(state, issue_id, 1, {
-      identifier: running_entry.identifier,
-      delay_type: continuation
-    })
+    if running_entry.draining:
+      state.claimed.remove(issue_id)  # settle without a continuation check
+    else:
+      state = schedule_retry(state, issue_id, 1, {
+        identifier: running_entry.identifier,
+        delay_type: continuation
+      })
   else:
     state = schedule_retry(state, issue_id, next_attempt_from(running_entry), {
       identifier: running_entry.identifier,
@@ -2182,8 +2249,15 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace
+- Losing routing on a non-pull-request tracker stops the running agent without workspace cleanup
+- On a pull-request tracker, a non-terminal running issue that loses routing is marked draining
+  instead of stopped, and repeat observation is idempotent
+- A draining issue that becomes routable again has its draining mark cleared
+- A drained session's normal exit completes the issue and releases the claim without scheduling a
+  continuation retry
 - Reconciliation with no running issues is a no-op
-- Normal worker exit schedules a short continuation retry (attempt 1)
+- Normal worker exit schedules a short continuation retry (attempt 1) unless the session was
+  draining
 - Abnormal worker exit increments retries with 10s-based exponential backoff
 - Retry backoff cap uses configured `agent.max_retry_backoff_ms`
 - Retry queue entries include attempt, due time, identifier, and error

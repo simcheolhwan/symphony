@@ -1,6 +1,15 @@
 defmodule SymphonyElixir.CoreTest do
   use SymphonyElixir.TestSupport
 
+  # Keeps a running orchestrator's polling offline: a tracker read that fails
+  # leaves running entries untouched, so a test can drive one entry through the
+  # lifecycle without a poll cycle racing it.
+  defmodule OfflinePrReviewerClient do
+    def preflight(_settings), do: :ok
+    def fetch_issues_by_states(_states), do: {:error, :offline}
+    def fetch_issues_by_ids(_ids), do: {:error, :offline}
+  end
+
   test "config defaults and validation checks" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -1061,6 +1070,500 @@ defmodule SymphonyElixir.CoreTest do
     refute MapSet.member?(updated_state.claimed, issue_id)
   end
 
+  test "reconcile notifies when a blocked issue reaches a terminal state" do
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "blocked-terminal"
+
+    state = %Orchestrator.State{
+      blocked: %{
+        issue_id => %{
+          identifier: "MT-566",
+          error: "operator input required",
+          worker_host: nil
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-566",
+      title: "Blocked issue closed by a human",
+      state: "Done",
+      labels: []
+    }
+
+    updated_state = Orchestrator.reconcile_blocked_issue_states_for_test([issue], state)
+
+    refute Map.has_key?(updated_state.blocked, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+
+    assert_receive {:notification, _path, payload}, 2_000
+    assert payload["event"] == "finished"
+    assert payload["issue"]["identifier"] == "MT-566"
+  end
+
+  test "reconcile notifies when a blocked issue disappears from the tracker" do
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "blocked-missing"
+
+    state = %Orchestrator.State{
+      blocked: %{
+        issue_id => %{
+          identifier: "MT-567",
+          error: "operator input required",
+          worker_host: nil,
+          issue: %Issue{
+            id: issue_id,
+            identifier: "MT-567",
+            title: "Blocked issue deleted from the tracker",
+            state: "In Progress",
+            labels: []
+          }
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      retry_attempts: %{}
+    }
+
+    updated_state = Orchestrator.reconcile_missing_blocked_issue_ids_for_test(state, [issue_id], [])
+
+    refute Map.has_key?(updated_state.blocked, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+
+    assert_receive {:notification, _path, payload}, 2_000
+    assert payload["event"] == "killed"
+    assert payload["issue"]["identifier"] == "MT-567"
+    assert payload["reason"] == "issue no longer visible in tracker"
+  end
+
+  test "reconcile notifies when a running issue disappears from the tracker" do
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "running-missing"
+
+    agent_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    state = %Orchestrator.State{
+      running: %{
+        issue_id => %{
+          pid: agent_pid,
+          ref: nil,
+          identifier: "MT-568",
+          issue: %Issue{
+            id: issue_id,
+            identifier: "MT-568",
+            title: "Running issue deleted from the tracker",
+            state: "In Progress",
+            labels: []
+          },
+          started_at: DateTime.utc_now()
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    updated_state = Orchestrator.reconcile_missing_running_issue_ids_for_test(state, [issue_id], [])
+
+    refute Map.has_key?(updated_state.running, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+
+    assert_receive {:notification, _path, payload}, 2_000
+    assert payload["event"] == "killed"
+    assert payload["issue"]["identifier"] == "MT-568"
+    assert payload["reason"] == "issue no longer visible in tracker"
+  end
+
+  test "reconcile drains a running pull request agent that lost its dispatch reason" do
+    write_pull_request_workflow_file!()
+
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "195"
+
+    agent_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    state = %Orchestrator.State{
+      running: %{
+        issue_id => %{
+          pid: agent_pid,
+          ref: nil,
+          identifier: "GH-195",
+          issue: %Issue{
+            id: issue_id,
+            identifier: "GH-195",
+            state: "open",
+            dispatchable: true,
+            labels: []
+          },
+          last_agent_message: "Submitted a review requesting changes.",
+          started_at: DateTime.utc_now()
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "GH-195",
+      title: "Review submitted while the agent was still wrapping up",
+      state: "open",
+      labels: []
+    }
+
+    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+    assert %{draining: true} = updated_state.running[issue_id]
+    assert MapSet.member?(updated_state.claimed, issue_id)
+    assert Process.alive?(agent_pid)
+    refute_receive {:notification, _path, _payload}, 200
+
+    drained_again = Orchestrator.reconcile_issue_states_for_test([issue], updated_state)
+
+    assert %{draining: true} = drained_again.running[issue_id]
+    assert Process.alive?(agent_pid)
+    refute_receive {:notification, _path, _payload}, 200
+
+    rerouted_state =
+      Orchestrator.reconcile_issue_states_for_test([%{issue | dispatchable: true}], drained_again)
+
+    refute Map.has_key?(rerouted_state.running[issue_id], :draining)
+    assert Process.alive?(agent_pid)
+
+    send(agent_pid, :stop)
+  end
+
+  test "reconcile stops a running agent that left routing on a non pull request tracker" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: ["symphony"])
+
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "running-unlabeled"
+
+    agent_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    state = %Orchestrator.State{
+      running: %{
+        issue_id => %{
+          pid: agent_pid,
+          ref: nil,
+          identifier: "MT-569",
+          issue: %Issue{
+            id: issue_id,
+            identifier: "MT-569",
+            state: "In Progress",
+            dispatchable: true,
+            labels: ["symphony"]
+          },
+          last_agent_message: "Removed the agent label after asking for a decision.",
+          started_at: DateTime.utc_now()
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-569",
+      title: "Label removed by the agent",
+      state: "In Progress",
+      labels: []
+    }
+
+    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+    refute Map.has_key?(updated_state.running, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    refute Process.alive?(agent_pid)
+
+    assert_receive {:notification, _path, payload}, 2_000
+    assert payload["event"] == "killed"
+    assert payload["reason"] == "issue no longer routed to this worker"
+    assert payload["agent_message"] == "Removed the agent label after asking for a decision."
+  end
+
+  test "a drained agent reports its session before the issue settles" do
+    write_pull_request_workflow_file!()
+
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "196"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :DrainedOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: "GH-196",
+      draining: true,
+      issue: %Issue{
+        id: issue_id,
+        identifier: "GH-196",
+        state: "open",
+        url: "https://github.com/acme/web/pull/196",
+        dispatchable: true,
+        labels: []
+      },
+      last_agent_message: "Submitted an approving review.",
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+
+    assert_receive {:notification, _path, completed}, 2_000
+    assert completed["event"] == "completed"
+    assert completed["agent_message"] == "Submitted an approving review."
+
+    assert_receive {:notification, _path, settled}, 2_000
+    assert settled["event"] == "settled"
+    assert settled["reason"] == "no remaining dispatch reasons"
+
+    state = :sys.get_state(pid)
+
+    refute Map.has_key?(state.running, issue_id)
+    refute MapSet.member?(state.claimed, issue_id)
+    refute Map.has_key?(state.retry_attempts, issue_id)
+    assert MapSet.member?(state.completed, issue_id)
+
+    refute_receive {:notification, _path, _payload}, 200
+  end
+
+  test "continuation lookup notifies when the issue moved to a non-active state" do
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "continuation-non-active"
+
+    state = %Orchestrator.State{
+      claimed: MapSet.new([issue_id]),
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-570",
+      title: "Moved to review by the agent",
+      state: "In Review",
+      dispatchable: true,
+      labels: []
+    }
+
+    updated_state =
+      Orchestrator.handle_retry_issue_lookup_for_test(issue, state, issue_id, 1, %{
+        identifier: issue.identifier
+      })
+
+    refute MapSet.member?(updated_state.claimed, issue_id)
+
+    assert_receive {:notification, _path, payload}, 2_000
+    assert payload["event"] == "finished"
+    assert payload["issue"]["identifier"] == "MT-570"
+    assert payload["reason"] == "issue moved to non-active state"
+  end
+
+  test "continuation lookup notifies when the issue left routing" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: ["symphony"])
+
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "continuation-unrouted"
+
+    state = %Orchestrator.State{
+      claimed: MapSet.new([issue_id]),
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-571",
+      title: "Label removed by the agent",
+      state: "In Progress",
+      dispatchable: true,
+      labels: []
+    }
+
+    updated_state =
+      Orchestrator.handle_retry_issue_lookup_for_test(issue, state, issue_id, 1, %{
+        identifier: issue.identifier
+      })
+
+    refute MapSet.member?(updated_state.claimed, issue_id)
+
+    assert_receive {:notification, _path, payload}, 2_000
+    assert payload["event"] == "killed"
+    assert payload["issue"]["identifier"] == "MT-571"
+    assert payload["reason"] == "issue no longer routed to this worker"
+  end
+
+  test "continuation lookup notifies when the issue reached a terminal state" do
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "continuation-terminal"
+
+    state = %Orchestrator.State{
+      claimed: MapSet.new([issue_id]),
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-572",
+      title: "Closed by a human before the continuation check",
+      state: "Done",
+      dispatchable: true,
+      labels: []
+    }
+
+    updated_state =
+      Orchestrator.handle_retry_issue_lookup_for_test(issue, state, issue_id, 1, %{
+        identifier: issue.identifier
+      })
+
+    refute MapSet.member?(updated_state.claimed, issue_id)
+
+    assert_receive {:notification, _path, payload}, 2_000
+    assert payload["event"] == "finished"
+    assert payload["issue"]["identifier"] == "MT-572"
+    assert payload["reason"] == "issue moved to terminal state"
+  end
+
+  test "a converged issue that vanished from the poll notifies its terminal state" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "converged-vanished"
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{
+        id: issue_id,
+        identifier: "MT-573",
+        title: "Merged by a human after convergence",
+        state: "Done",
+        labels: []
+      }
+    ])
+
+    state = %Orchestrator.State{converged_notified: %{issue_id => "abc123"}}
+
+    updated_state = Orchestrator.notify_converged_issues_for_test(state, [])
+
+    assert updated_state.converged_notified == %{}
+
+    assert_receive {:notification, _path, payload}, 2_000
+    assert payload["event"] == "finished"
+    assert payload["issue"]["identifier"] == "MT-573"
+  end
+
+  test "a converged issue that vanished but is still active drops without notifying" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+
+    port = start_echo_server()
+    original_notify_url = System.get_env("SYMPHONY_NOTIFY_URL")
+    System.put_env("SYMPHONY_NOTIFY_URL", "http://127.0.0.1:#{port}/symphony/events")
+    System.put_env("SYMPHONY_INSTANCE_NAME", "core-test")
+    on_exit(fn -> restore_env("SYMPHONY_NOTIFY_URL", original_notify_url) end)
+
+    issue_id = "converged-still-active"
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{
+        id: issue_id,
+        identifier: "MT-574",
+        title: "Convergence mark lost while still open",
+        state: "In Progress",
+        labels: []
+      }
+    ])
+
+    state = %Orchestrator.State{converged_notified: %{issue_id => "abc123"}}
+
+    updated_state = Orchestrator.notify_converged_issues_for_test(state, [])
+
+    assert updated_state.converged_notified == %{}
+
+    refute_receive {:notification, _path, _payload}, 200
+  end
+
   test "retry releases its claim when a required label is removed" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: ["symphony"])
 
@@ -1398,6 +1901,23 @@ defmodule SymphonyElixir.CoreTest do
     }
 
     assert Orchestrator.select_worker_host_for_test(state, "worker-a") == "worker-a"
+  end
+
+  # The client stub is installed before the workflow file is written because
+  # loading it runs the tracker preflight through the same client.
+  defp write_pull_request_workflow_file! do
+    original_client_module = Application.get_env(:symphony_elixir, :github_pr_reviewer_client_module)
+
+    Application.put_env(:symphony_elixir, :github_pr_reviewer_client_module, OfflinePrReviewerClient)
+
+    on_exit(fn -> restore_app_env(:github_pr_reviewer_client_module, original_client_module) end)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github_pr_reviewer",
+      tracker_provider: %{"repo" => "acme/web", "token" => "test-token"},
+      tracker_active_states: ["open"],
+      tracker_terminal_states: ["closed"]
+    )
   end
 
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
