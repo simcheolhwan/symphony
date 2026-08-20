@@ -2095,7 +2095,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Config defaults apply when OPTIONAL values are missing
 - `tracker.kind` validation enforces an implementation-supported adapter
 - `tracker.provider` preserves adapter-owned keys and validates them through the selected adapter
-- `$VAR` resolution works for documented adapter secret keys and path values
+- `$VAR` resolution works for documented adapter config values, including secret keys, non-secret
+  provider fields, and path values
 - `~` path expansion works
 - `codex.command` is preserved as a shell command string
 - Per-state concurrency override map normalizes state names and ignores invalid values
