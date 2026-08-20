@@ -7,9 +7,10 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, Notifier, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Tracker.Issue
 
+  @pull_request_tracker_kinds ["github_pr_author", "github_pr_reviewer"]
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
   # Slightly above the dashboard render interval so "checking now…" can render.
@@ -39,6 +40,7 @@ defmodule SymphonyElixir.Orchestrator do
       claimed: MapSet.new(),
       blocked: %{},
       retry_attempts: %{},
+      converged_notified: %{},
       codex_totals: nil,
       codex_rate_limits: nil
     ]
@@ -214,20 +216,27 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_agent_down(:normal, state, issue_id, running_entry, session_id) do
-    if input_required_blocker?(running_entry) do
-      block_input_required_agent_down(state, issue_id, running_entry, session_id, :normal)
-    else
-      Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+    cond do
+      input_required_blocker?(running_entry) ->
+        block_input_required_agent_down(state, issue_id, running_entry, session_id, :normal)
 
-      state
-      |> complete_issue(issue_id)
-      |> schedule_issue_retry(issue_id, 1, %{
-        identifier: running_entry.identifier,
-        issue_url: running_entry.issue.url,
-        delay_type: :continuation,
-        worker_host: Map.get(running_entry, :worker_host),
-        workspace_path: Map.get(running_entry, :workspace_path)
-      })
+      draining_entry?(running_entry) ->
+        finish_drained_agent_down(state, issue_id, running_entry, session_id)
+
+      true ->
+        Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+
+        Notifier.notify(:completed, running_entry.issue, nil, last_agent_message(running_entry))
+
+        state
+        |> complete_issue(issue_id)
+        |> schedule_issue_retry(issue_id, 1, %{
+          identifier: running_entry.identifier,
+          issue_url: running_entry.issue.url,
+          delay_type: :continuation,
+          worker_host: Map.get(running_entry, :worker_host),
+          workspace_path: Map.get(running_entry, :workspace_path)
+        })
     end
   end
 
@@ -237,6 +246,23 @@ defmodule SymphonyElixir.Orchestrator do
     else
       retry_agent_down(state, issue_id, running_entry, session_id, reason)
     end
+  end
+
+  # The session was already known to have no dispatch reason left, so it ends
+  # the issue here instead of scheduling the continuation check that would only
+  # rediscover the same thing. What the session did is reported before the
+  # issue settles, as one ordered pair so both reach the receiver that way.
+  defp finish_drained_agent_down(state, issue_id, running_entry, session_id) do
+    Logger.info("Drained agent task completed for issue_id=#{issue_id} issue_identifier=#{running_entry.identifier} session_id=#{session_id}; settling issue")
+
+    Notifier.notify_in_order([
+      {:completed, running_entry.issue, nil, last_agent_message(running_entry)},
+      unroutable_notification(running_entry.issue, nil)
+    ])
+
+    state
+    |> complete_issue(issue_id)
+    |> release_issue_claim(issue_id)
   end
 
   defp block_input_required_agent_down(state, issue_id, running_entry, session_id, reason) do
@@ -249,6 +275,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_agent_down(state, issue_id, running_entry, session_id, reason) do
     Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
+
+    Notifier.notify(:retried, running_entry.issue, "agent exited: #{inspect(reason)}")
 
     next_attempt = next_retry_attempt_from_running(running_entry)
 
@@ -268,9 +296,14 @@ defmodule SymphonyElixir.Orchestrator do
       |> reconcile_blocked_issues()
 
     with :ok <- Config.validate!(),
-         {:ok, issues} <- Tracker.fetch_issues_by_states(Config.settings!().tracker.active_states),
-         true <- available_slots(state) > 0 do
-      choose_issues(issues, state)
+         {:ok, issues} <- Tracker.fetch_issues_by_states(Config.settings!().tracker.active_states) do
+      state = notify_converged_issues(state, issues)
+
+      if available_slots(state) > 0 do
+        choose_issues(issues, state)
+      else
+        state
+      end
     else
       {:error, :missing_linear_api_token} ->
         Logger.error("Tracker API token missing in WORKFLOW.md")
@@ -309,11 +342,74 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         Logger.error("Failed to fetch from issue tracker: #{inspect(reason)}")
         state
-
-      false ->
-        state
     end
   end
+
+  # Convergence happens outside any agent run, so polling is the only place that
+  # can observe it. The head sha it was observed on is remembered so the same
+  # state is announced once, and a new push announces again.
+  defp notify_converged_issues(%State{} = state, issues) when is_list(issues) do
+    notified =
+      for issue <- issues,
+          head_sha = converged_head_sha(issue),
+          into: %{},
+          do: {issue.id, notify_converged_issue(issue, head_sha, state.converged_notified)}
+
+    %{state | converged_notified: resolve_vanished_converged_issues(state.converged_notified, notified)}
+  end
+
+  defp notify_converged_issues(state, _issues), do: state
+
+  # A converged issue vanishing from the poll usually means a human merged or
+  # closed the pull request, a transition with no runtime counterpart. Only the
+  # issues already announced as converged are re-fetched, so their threads get
+  # a closing notification without diffing the whole poll. An issue that is
+  # somehow still active is dropped without notice and starts over at its next
+  # convergence; a lookup failure keeps the entry for the next poll.
+  defp resolve_vanished_converged_issues(previous, notified) do
+    case Map.keys(previous) -- Map.keys(notified) do
+      [] ->
+        notified
+
+      vanished_ids ->
+        case Tracker.fetch_issues_by_ids(vanished_ids) do
+          {:ok, issues} ->
+            terminal_states = terminal_state_set()
+
+            Enum.each(issues, fn issue ->
+              if terminal_issue_state?(issue.state, terminal_states) do
+                Logger.info("Converged issue reached a terminal state: #{issue_context(issue)} state=#{issue.state}")
+
+                notify_terminal_issue(issue)
+              end
+            end)
+
+            notified
+
+          {:error, reason} ->
+            Logger.debug("Failed to look up vanished converged issues: #{inspect(reason)}; keeping them for the next poll")
+
+            Map.merge(Map.take(previous, vanished_ids), notified)
+        end
+    end
+  end
+
+  defp notify_converged_issue(%Issue{} = issue, head_sha, notified) do
+    if Map.get(notified, issue.id) != head_sha do
+      Logger.info("Issue converged and awaiting merge: #{issue_context(issue)} head_sha=#{head_sha}")
+
+      Notifier.notify(:mergeable, issue)
+    end
+
+    head_sha
+  end
+
+  defp converged_head_sha(%Issue{native_ref: %{"converged" => true, "head_sha" => head_sha}})
+       when is_binary(head_sha) do
+    head_sha
+  end
+
+  defp converged_head_sha(_issue), do: nil
 
   defp reconcile_running_issues(%State{} = state) do
     state = reconcile_stalled_running_issues(state)
@@ -365,6 +461,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc false
+  @spec notify_converged_issues_for_test(term(), [Issue.t()]) :: term()
+  def notify_converged_issues_for_test(%State{} = state, issues) when is_list(issues) do
+    notify_converged_issues(state, issues)
+  end
+
+  @doc false
   @spec reconcile_issue_states_for_test([Issue.t()], term()) :: term()
   def reconcile_issue_states_for_test(issues, %State{} = state) when is_list(issues) do
     reconcile_running_issue_states(issues, state, active_state_set(), terminal_state_set())
@@ -378,6 +480,20 @@ defmodule SymphonyElixir.Orchestrator do
   @spec reconcile_blocked_issue_states_for_test([Issue.t()], term()) :: term()
   def reconcile_blocked_issue_states_for_test(issues, %State{} = state) when is_list(issues) do
     reconcile_blocked_issue_states(issues, state, active_state_set(), terminal_state_set())
+  end
+
+  @doc false
+  @spec reconcile_missing_running_issue_ids_for_test(term(), [String.t()], [Issue.t()]) :: term()
+  def reconcile_missing_running_issue_ids_for_test(%State{} = state, requested_issue_ids, issues)
+      when is_list(requested_issue_ids) and is_list(issues) do
+    reconcile_missing_running_issue_ids(state, requested_issue_ids, issues)
+  end
+
+  @doc false
+  @spec reconcile_missing_blocked_issue_ids_for_test(term(), [String.t()], [Issue.t()]) :: term()
+  def reconcile_missing_blocked_issue_ids_for_test(%State{} = state, requested_issue_ids, issues)
+      when is_list(requested_issue_ids) and is_list(issues) do
+    reconcile_missing_blocked_issue_ids(state, requested_issue_ids, issues)
   end
 
   @doc false
@@ -431,12 +547,11 @@ defmodule SymphonyElixir.Orchestrator do
       terminal_issue_state?(issue.state, terminal_states) ->
         Logger.info("Issue moved to terminal state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
+        notify_terminal_issue(issue)
         terminate_running_issue(state, issue.id, true)
 
       !issue_routable?(issue) ->
-        Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} assignee=#{inspect(issue.assignee_id)}; stopping active agent")
-
-        terminate_running_issue(state, issue.id, false)
+        reconcile_unroutable_issue(state, issue)
 
       active_issue_state?(issue.state, active_states) ->
         refresh_running_issue_state(state, issue)
@@ -444,11 +559,94 @@ defmodule SymphonyElixir.Orchestrator do
       true ->
         Logger.info("Issue moved to non-active state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
+        Notifier.notify(:finished, issue, "issue moved to non-active state")
         terminate_running_issue(state, issue.id, false)
     end
   end
 
   defp reconcile_issue_state(_issue, state, _active_states, _terminal_states), do: state
+
+  # On a pull request tracker the agent's own converging action (submitting a
+  # review, pushing a fix) can clear the very dispatch reason that routed the
+  # pull request here, and polling can observe that within seconds while the
+  # session is still writing its wrap-up. Killing the session there loses the
+  # completion event carrying the agent's final message, so losing routing only
+  # blocks re-dispatch: the session is marked draining and left to end on its
+  # own, and the settle notification waits for that end. Anywhere else losing
+  # routing is a human taking the work away, which stops the agent at once.
+  defp reconcile_unroutable_issue(%State{} = state, %Issue{} = issue) do
+    running_entry = Map.get(state.running, issue.id)
+
+    cond do
+      is_nil(running_entry) or not pull_request_tracker?() ->
+        Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} assignee=#{inspect(issue.assignee_id)}; stopping active agent")
+
+        notify_unroutable_issue(issue, last_agent_message(running_entry))
+        terminate_running_issue(state, issue.id, false)
+
+      draining_entry?(running_entry) ->
+        Logger.debug("Issue still draining after losing routing: #{issue_context(issue)} session_id=#{running_entry_session_id(running_entry)}")
+
+        state
+
+      true ->
+        Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} session_id=#{running_entry_session_id(running_entry)}; draining active agent")
+
+        running_entry = Map.merge(running_entry, %{draining: true, issue: issue})
+        %{state | running: Map.put(state.running, issue.id, running_entry)}
+    end
+  end
+
+  defp draining_entry?(entry) when is_map(entry), do: Map.get(entry, :draining) == true
+  defp draining_entry?(_entry), do: false
+
+  defp last_agent_message(entry) when is_map(entry), do: Map.get(entry, :last_agent_message)
+  defp last_agent_message(_entry), do: nil
+
+  # A merged pull request is the workflow running to its end; a pull request
+  # closed without a merge is work abandoned. Every other tracker reaches a
+  # terminal state only by finishing.
+  defp notify_terminal_issue(%Issue{} = issue) do
+    cond do
+      not pull_request_tracker?() ->
+        Notifier.notify(:finished, issue, "issue moved to terminal state")
+
+      merged_pull_request?(issue) ->
+        Notifier.notify(:finished, issue, "pull request merged")
+
+      true ->
+        Notifier.notify(:killed, issue, "pull request closed without merge")
+    end
+  end
+
+  # A pull request stops being routable once no dispatch reason holds, which is
+  # the workflow idling rather than failing. Elsewhere it means the item was
+  # taken away from this worker. Whenever this ends a session that was still
+  # running, `agent_message` carries what that session last reported, which no
+  # later event can report on its behalf.
+  defp unroutable_notification(%Issue{} = issue, agent_message) do
+    if pull_request_tracker?() do
+      {:settled, issue, "no remaining dispatch reasons", agent_message}
+    else
+      {:killed, issue, "issue no longer routed to this worker", agent_message}
+    end
+  end
+
+  defp notify_unroutable_issue(%Issue{} = issue, agent_message \\ nil) do
+    Notifier.notify_in_order([unroutable_notification(issue, agent_message)])
+  end
+
+  # Classification only labels a notification, so it reads settings without the
+  # raise that would turn a config problem into a failed transition.
+  defp pull_request_tracker? do
+    case Config.settings() do
+      {:ok, %{tracker: %{kind: kind}}} -> kind in @pull_request_tracker_kinds
+      _ -> false
+    end
+  end
+
+  defp merged_pull_request?(%Issue{native_ref: %{"merged" => true}}), do: true
+  defp merged_pull_request?(%Issue{}), do: false
 
   defp reconcile_blocked_issue_states([], state, _active_states, _terminal_states), do: state
 
@@ -465,11 +663,13 @@ defmodule SymphonyElixir.Orchestrator do
     cond do
       terminal_issue_state?(issue.state, terminal_states) ->
         Logger.info("Blocked issue moved to terminal state: #{issue_context(issue)} state=#{issue.state}; releasing block")
+        notify_terminal_issue(issue)
         cleanup_issue_workspace(issue, Map.get(state.blocked, issue.id, %{}))
         release_issue_claim(state, issue.id)
 
       !issue_routable?(issue) ->
         Logger.info("Blocked issue no longer routed to this worker: #{issue_context(issue)} assignee=#{inspect(issue.assignee_id)}; releasing block")
+        notify_unroutable_issue(issue)
         release_issue_claim(state, issue.id)
 
       active_issue_state?(issue.state, active_states) ->
@@ -477,6 +677,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       true ->
         Logger.info("Blocked issue moved to non-active state: #{issue_context(issue)} state=#{issue.state}; releasing block")
+        Notifier.notify(:finished, issue, "issue moved to non-active state")
         release_issue_claim(state, issue.id)
     end
   end
@@ -498,6 +699,7 @@ defmodule SymphonyElixir.Orchestrator do
         state_acc
       else
         log_missing_running_issue(state_acc, issue_id)
+        notify_missing_issue(Map.get(state_acc.running, issue_id))
         terminate_running_issue(state_acc, issue_id, false)
       end
     end)
@@ -520,6 +722,7 @@ defmodule SymphonyElixir.Orchestrator do
         state_acc
       else
         Logger.info("Blocked issue no longer visible during state refresh: issue_id=#{issue_id}; releasing block")
+        notify_missing_issue(Map.get(state_acc.blocked, issue_id))
         release_issue_claim(state_acc, issue_id)
       end
     end)
@@ -539,10 +742,25 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp log_missing_running_issue(_state, _issue_id), do: :ok
 
+  # Leaving the tracker's view ends the issue regardless of whether an agent
+  # session was still attached, so running and blocked entries notify the same
+  # way. The tracker no longer returns the issue, so only the last known copy
+  # cached on the entry can describe it; without that copy there is nothing to
+  # send.
+  defp notify_missing_issue(%{issue: %Issue{} = issue}) do
+    Notifier.notify(:killed, issue, "issue no longer visible in tracker")
+  end
+
+  defp notify_missing_issue(_entry), do: :ok
+
+  # Reaching a refresh means the issue is routable and active again, which
+  # clears a drain marked on an earlier poll: the session has a dispatch reason
+  # once more and ends into the usual continuation check.
   defp refresh_running_issue_state(%State{} = state, %Issue{} = issue) do
     case Map.get(state.running, issue.id) do
       %{issue: _} = running_entry ->
-        %{state | running: Map.put(state.running, issue.id, %{running_entry | issue: issue})}
+        running_entry = Map.delete(%{running_entry | issue: issue}, :draining)
+        %{state | running: Map.put(state.running, issue.id, running_entry)}
 
       _ ->
         state
@@ -630,6 +848,8 @@ defmodule SymphonyElixir.Orchestrator do
         |> stop_and_block_issue(issue_id, running_entry, error)
       else
         Logger.warning("Issue stalled: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} elapsed_ms=#{elapsed_ms}; restarting with backoff")
+
+        Notifier.notify(:retried, running_entry.issue, "stalled for #{elapsed_ms}ms without codex activity")
 
         next_attempt = next_retry_attempt_from_running(running_entry)
 
@@ -773,9 +993,12 @@ defmodule SymphonyElixir.Orchestrator do
       error: error,
       blocked_at: DateTime.utc_now(),
       last_codex_message: Map.get(running_entry, :last_codex_message),
+      last_agent_message: Map.get(running_entry, :last_agent_message),
       last_codex_event: Map.get(running_entry, :last_codex_event),
       last_codex_timestamp: Map.get(running_entry, :last_codex_timestamp)
     }
+
+    Notifier.notify(:blocked, blocked_entry.issue, error, blocked_entry.last_agent_message)
 
     %{
       state
@@ -967,6 +1190,8 @@ defmodule SymphonyElixir.Orchestrator do
 
         Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"}")
 
+        Notifier.notify(:started, issue)
+
         running =
           Map.put(state.running, issue.id, %{
             pid: pid,
@@ -1000,6 +1225,9 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, reason} ->
         Logger.error("Unable to spawn agent for #{issue_context(issue)}: #{inspect(reason)}")
+
+        Notifier.notify(:retried, issue, "failed to spawn agent: #{inspect(reason)}")
+
         next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
 
         schedule_issue_retry(state, issue.id, next_attempt, %{
@@ -1118,6 +1346,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # This lookup runs after the agent session ended, so the issue is no longer
+  # in `running` or `blocked` and polling reconciliation will never see it
+  # again: a non-dispatch outcome here is the last chance to notify, using the
+  # same classification reconciliation applies.
   defp handle_retry_issue_lookup(%Issue{} = issue, state, issue_id, attempt, metadata) do
     terminal_states = terminal_state_set()
 
@@ -1125,15 +1357,23 @@ defmodule SymphonyElixir.Orchestrator do
       terminal_issue_state?(issue.state, terminal_states) ->
         Logger.info("Issue state is terminal: issue_id=#{issue_id} issue_identifier=#{issue.identifier} state=#{issue.state}; removing associated workspace")
 
+        notify_terminal_issue(issue)
         cleanup_issue_workspace(issue, metadata)
         {:noreply, release_issue_claim(state, issue_id)}
 
       retry_candidate_issue?(issue, terminal_states) ->
         handle_active_retry(state, issue, attempt, metadata)
 
+      !issue_routable?(issue) ->
+        Logger.debug("Issue left routing, removing claim issue_id=#{issue_id} issue_identifier=#{issue.identifier}")
+
+        notify_unroutable_issue(issue)
+        {:noreply, release_issue_claim(state, issue_id)}
+
       true ->
         Logger.debug("Issue left active states, removing claim issue_id=#{issue_id} issue_identifier=#{issue.identifier}")
 
+        Notifier.notify(:finished, issue, "issue moved to non-active state")
         {:noreply, release_issue_claim(state, issue_id)}
     end
   end
@@ -1586,6 +1826,7 @@ defmodule SymphonyElixir.Orchestrator do
       Map.merge(running_entry, %{
         last_codex_timestamp: timestamp,
         last_codex_message: summarize_codex_update(update),
+        last_agent_message: agent_message_for_update(Map.get(running_entry, :last_agent_message), update),
         session_id: session_id_for_update(running_entry.session_id, update),
         last_codex_event: event,
         codex_app_server_pid: codex_app_server_pid_for_update(codex_app_server_pid, update),
@@ -1613,6 +1854,19 @@ defmodule SymphonyElixir.Orchestrator do
     do: to_string(pid)
 
   defp codex_app_server_pid_for_update(existing, _update), do: existing
+
+  # Codex reports every agent message as a completed item, so keeping the last
+  # one leaves the message the session ended on.
+  defp agent_message_for_update(_existing, %{
+         payload: %{
+           "method" => "item/completed",
+           "params" => %{"item" => %{"type" => type, "text" => text}}
+         }
+       })
+       when type in ["agentMessage", "agent_message"] and is_binary(text),
+       do: text
+
+  defp agent_message_for_update(existing, _update), do: existing
 
   defp session_id_for_update(_existing, %{session_id: session_id}) when is_binary(session_id),
     do: session_id

@@ -85,6 +85,23 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @spec notification_url() :: String.t() | nil
+  def notification_url do
+    case System.get_env("SYMPHONY_NOTIFY_URL") do
+      value when is_binary(value) -> parse_http_url(value)
+      _ -> nil
+    end
+  end
+
+  @spec instance_name() :: String.t() | nil
+  def instance_name, do: display_name("SYMPHONY_INSTANCE_NAME")
+
+  @spec workflow_label() :: String.t() | nil
+  def workflow_label, do: display_name("SYMPHONY_WORKFLOW_LABEL")
+
+  @spec target_name() :: String.t() | nil
+  def target_name, do: display_name("SYMPHONY_TARGET_NAME")
+
   @doc false
   @spec local_workspace_root() :: Path.t()
   def local_workspace_root do
@@ -139,6 +156,43 @@ defmodule SymphonyElixir.Config do
 
       other ->
         "Invalid WORKFLOW.md config: #{inspect(other)}"
+    end
+  end
+
+  # The notification receiver derives its port from this URL and boots only
+  # with the exact form `http://127.0.0.1:<port>` (it binds to loopback, and
+  # `localhost` can resolve differently between the Erlang sender and the Node
+  # receiver), so the sender accepts only URLs the receiver would accept
+  # instead of posting into the void. The prefix check rejects URLs that reach
+  # the same parse result through userinfo or an implicit default port.
+  defp parse_http_url(value) do
+    url = String.trim(value)
+
+    case URI.new(url) do
+      {:ok, %URI{scheme: "http", host: "127.0.0.1", port: port}}
+      when is_integer(port) and port > 0 ->
+        if String.starts_with?(url, "http://127.0.0.1:") do
+          url
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  # Injected display strings are rendered verbatim by notification consumers, so
+  # control characters are rejected to prevent escape sequence forgery.
+  defp display_name(variable) do
+    case System.get_env(variable) do
+      value when is_binary(value) ->
+        name = String.trim(value)
+
+        if name != "" and not Regex.match?(~r/[\x00-\x1F\x7F]/, name) do
+          name
+        end
+
+      _ ->
+        nil
     end
   end
 end

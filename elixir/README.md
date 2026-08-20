@@ -28,7 +28,10 @@ executes those tools with configured host-side auth and removes declared tracker
 variables from the Codex child, so the agent does not need a second tracker login.
 
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
-Symphony stops the active agent for that issue and cleans up matching workspaces.
+Symphony stops the active agent for that issue and cleans up matching workspaces. If a running
+issue merely loses its routing (`dispatchable` or a required label), Symphony stops the agent
+without workspace cleanup, except on the pull request trackers, where the session is marked
+draining and left to finish on its own.
 
 If Codex reports that operator input, approval, or MCP elicitation is required, Symphony keeps the
 issue claimed and exposes it as blocked in the runtime state, JSON API, and dashboard. Blocked
@@ -180,6 +183,10 @@ Notes:
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the
   launched shell.
+- Notification settings are host environment variables with no `WORKFLOW.md` counterpart:
+  `SYMPHONY_NOTIFY_URL` (`http://127.0.0.1:<port>[/path]` with an explicit port; unset disables
+  notifications entirely) plus the display names `SYMPHONY_INSTANCE_NAME`,
+  `SYMPHONY_WORKFLOW_LABEL`, and `SYMPHONY_TARGET_NAME` carried in notification payloads.
 
 ```yaml
 tracker:

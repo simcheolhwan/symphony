@@ -1,3 +1,21 @@
+defmodule SymphonyElixir.TestSupport.EchoPlug do
+  @moduledoc false
+
+  @behaviour Plug
+
+  import Plug.Conn
+
+  @impl true
+  def init(opts), do: opts
+
+  @impl true
+  def call(conn, opts) do
+    {:ok, body, conn} = read_body(conn)
+    send(Keyword.fetch!(opts, :test_pid), {:notification, conn.request_path, Jason.decode!(body)})
+    send_resp(conn, 202, "")
+  end
+end
+
 defmodule SymphonyElixir.TestSupport do
   @workflow_prompt "You are an agent for this repository."
 
@@ -22,9 +40,18 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
-        only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [
+          write_workflow_file!: 1,
+          write_workflow_file!: 2,
+          restore_env: 2,
+          stop_default_http_server: 0,
+          start_echo_server: 0
+        ]
 
       setup do
+        previous_instance_name = System.get_env("SYMPHONY_INSTANCE_NAME")
+        System.delete_env("SYMPHONY_INSTANCE_NAME")
+
         workflow_root =
           Path.join(
             System.tmp_dir!(),
@@ -43,6 +70,7 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_fetch_error)
+          restore_env("SYMPHONY_INSTANCE_NAME", previous_instance_name)
           File.rm_rf(workflow_root)
         end)
 
@@ -69,6 +97,21 @@ defmodule SymphonyElixir.TestSupport do
   def restore_env(key, nil), do: System.delete_env(key)
   def restore_env(key, value), do: System.put_env(key, value)
 
+  # Starts a local HTTP server that echoes each request body to the calling
+  # test process as {:notification, path, decoded_payload}. Returns the port.
+  def start_echo_server(test_pid \\ self()) do
+    {:ok, server} =
+      Bandit.start_link(
+        plug: {SymphonyElixir.TestSupport.EchoPlug, test_pid: test_pid},
+        ip: {127, 0, 0, 1},
+        port: 0,
+        startup_log: false
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+    port
+  end
+
   def stop_default_http_server do
     case Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn
            {SymphonyElixir.HttpServer, _pid, _type, _modules} -> true
@@ -94,6 +137,7 @@ defmodule SymphonyElixir.TestSupport do
         [
           tracker_kind: "linear",
           tracker_endpoint: "https://api.linear.app/graphql",
+          tracker_provider: nil,
           tracker_api_token: "token",
           tracker_project_slug: "project",
           tracker_assignee: nil,
@@ -132,6 +176,7 @@ defmodule SymphonyElixir.TestSupport do
 
     tracker_kind = Keyword.get(config, :tracker_kind)
     tracker_endpoint = Keyword.get(config, :tracker_endpoint)
+    tracker_provider = Keyword.get(config, :tracker_provider)
     tracker_api_token = Keyword.get(config, :tracker_api_token)
     tracker_project_slug = Keyword.get(config, :tracker_project_slug)
     tracker_assignee = Keyword.get(config, :tracker_assignee)
@@ -171,6 +216,7 @@ defmodule SymphonyElixir.TestSupport do
         "tracker:",
         "  kind: #{yaml_value(tracker_kind)}",
         "  endpoint: #{yaml_value(tracker_endpoint)}",
+        tracker_provider && "  provider: #{yaml_value(tracker_provider)}",
         "  api_key: #{yaml_value(tracker_api_token)}",
         "  project_slug: #{yaml_value(tracker_project_slug)}",
         "  assignee: #{yaml_value(tracker_assignee)}",
