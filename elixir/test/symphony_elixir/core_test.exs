@@ -198,6 +198,14 @@ defmodule SymphonyElixir.CoreTest do
              Workflow.load(workflow_path)
   end
 
+  test "workflow load preserves UTF-8 characters containing newline-like bytes" do
+    workflow_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "UTF8_WORKFLOW.md")
+    File.write!(workflow_path, "업무 지침\n")
+
+    assert {:ok, %{config: %{}, prompt: "업무 지침", prompt_template: "업무 지침"}} =
+             Workflow.load(workflow_path)
+  end
+
   test "workflow load accepts unterminated front matter with an empty prompt" do
     workflow_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "UNTERMINATED_WORKFLOW.md")
     File.write!(workflow_path, "---\ntracker:\n  kind: linear\n")
