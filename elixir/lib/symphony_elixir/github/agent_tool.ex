@@ -8,7 +8,7 @@ defmodule SymphonyElixir.GitHub.AgentTool do
   @github_api_tool "github_api"
   @allowed_methods ["GET", "POST", "PATCH", "PUT", "DELETE"]
   @github_api_description """
-  Execute a GitHub REST API request using Symphony's configured auth.
+  Execute a GitHub REST API request using Symphony's configured token or GitHub CLI auth.
   """
   @github_api_input_schema %{
     "type" => "object",
@@ -149,11 +149,11 @@ defmodule SymphonyElixir.GitHub.AgentTool do
   end
 
   defp tool_error_payload(:missing_github_token) do
-    %{
-      "error" => %{
-        "message" => "Symphony is missing GitHub auth. Set `tracker.provider.token` in `WORKFLOW.md` or export `GITHUB_TOKEN`."
-      }
-    }
+    missing_auth_payload()
+  end
+
+  defp tool_error_payload(:missing_github_auth) do
+    missing_auth_payload()
   end
 
   defp tool_error_payload({:github_api_request, reason}) do
@@ -167,6 +167,14 @@ defmodule SymphonyElixir.GitHub.AgentTool do
 
   defp tool_error_payload(reason) do
     %{"error" => %{"message" => "GitHub API tool execution failed.", "reason" => inspect(reason)}}
+  end
+
+  defp missing_auth_payload do
+    %{
+      "error" => %{
+        "message" => "Symphony is missing GitHub auth. Configure `tracker.provider.token`, export `GITHUB_TOKEN`, or authenticate the host with `gh auth login`."
+      }
+    }
   end
 
   defp supported_tool_names, do: Enum.map(tool_specs(), & &1["name"])

@@ -13,6 +13,8 @@ defmodule SymphonyElixir.Tracker do
   @adapters %{
     "asana" => SymphonyElixir.Asana.Adapter,
     "github" => SymphonyElixir.GitHub.Adapter,
+    "github_pr_author" => SymphonyElixir.GitHub.PrAuthor.Adapter,
+    "github_pr_reviewer" => SymphonyElixir.GitHub.PrReviewer.Adapter,
     "gitlab" => SymphonyElixir.GitLab.Adapter,
     "jira" => SymphonyElixir.Jira.Adapter,
     "linear" => SymphonyElixir.Linear.Adapter,
@@ -27,10 +29,12 @@ defmodule SymphonyElixir.Tracker do
   @callback execute_agent_tool(String.t(), term(), keyword()) :: map()
   @callback secret_environment_names(map()) :: [String.t()]
   @callback validate_config(map()) :: :ok | {:error, term()}
+  @callback preflight(map()) :: :ok | {:error, term()}
 
   @optional_callbacks agent_tool_specs: 0,
                       execute_agent_tool: 3,
-                      validate_config: 1
+                      validate_config: 1,
+                      preflight: 1
 
   @spec fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_states(states) do
@@ -133,6 +137,17 @@ defmodule SymphonyElixir.Tracker do
     with {:ok, adapter} <- adapter_for_kind(kind) do
       if Code.ensure_loaded?(adapter) and function_exported?(adapter, :validate_config, 1) do
         adapter.validate_config(tracker_settings)
+      else
+        :ok
+      end
+    end
+  end
+
+  @spec preflight(map()) :: :ok | {:error, term()}
+  def preflight(%{kind: kind} = tracker_settings) do
+    with {:ok, adapter} <- adapter_for_kind(kind) do
+      if Code.ensure_loaded?(adapter) and function_exported?(adapter, :preflight, 1) do
+        adapter.preflight(tracker_settings)
       else
         :ok
       end

@@ -7,6 +7,8 @@ defmodule SymphonyElixir.Tracker.Issue do
   board or project entry. `native_ref` carries non-secret provider identifiers
   needed by provider-native agent tools. `identifier` remains the human-readable
   value used to derive the workspace key and must be unique within that scope.
+  `dispatch_reasons` carries the structured codes behind a `dispatchable` item so
+  observers can report why the work was picked up.
   """
 
   defstruct [
@@ -23,6 +25,7 @@ defmodule SymphonyElixir.Tracker.Issue do
     blocked_by: [],
     labels: [],
     dispatchable: false,
+    dispatch_reasons: [],
     created_at: nil,
     updated_at: nil
   ]
@@ -41,6 +44,7 @@ defmodule SymphonyElixir.Tracker.Issue do
           labels: [String.t()],
           blocked_by: [map()],
           dispatchable: boolean(),
+          dispatch_reasons: [String.t()],
           created_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }

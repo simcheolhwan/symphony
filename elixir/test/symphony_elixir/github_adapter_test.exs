@@ -102,6 +102,97 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
            ]
   end
 
+  test "client preflight verifies repository access and classifies permanent access failures" do
+    settings = tracker_settings()
+
+    assert :ok =
+             GitHubClient.preflight_for_test(
+               settings,
+               fn "GET", "/repos/octo/repo", %{}, nil, github_settings ->
+                 send(self(), {:github_preflight_request, github_settings})
+                 {:ok, %{status: 200, body: %{"full_name" => "octo/repo"}}}
+               end
+             )
+
+    assert_receive {:github_preflight_request, %{repo: "octo/repo", token: "test-token"}}
+
+    Enum.each([401, 403, 404], fn status ->
+      assert {:error, {:github_repo_inaccessible, "octo/repo", ^status}} =
+               GitHubClient.preflight_for_test(
+                 settings,
+                 fn "GET", "/repos/octo/repo", %{}, nil, _github_settings ->
+                   {:ok, %{status: status, body: %{"message" => "Not Found"}}}
+                 end
+               )
+    end)
+
+    assert {:error, :github_unknown_payload} =
+             GitHubClient.preflight_for_test(
+               settings,
+               fn "GET", "/repos/octo/repo", %{}, nil, _github_settings ->
+                 {:ok, %{status: 200, body: []}}
+               end
+             )
+
+    assert {:error, {:github_api_request, :timeout}} =
+             GitHubClient.preflight_for_test(
+               settings,
+               fn "GET", "/repos/octo/repo", %{}, nil, _github_settings ->
+                 {:error, {:github_api_request, :timeout}}
+               end
+             )
+  end
+
+  test "client falls back to the active gh account only when no token resolves" do
+    previous_token = System.get_env("GITHUB_TOKEN")
+    System.delete_env("GITHUB_TOKEN")
+    on_exit(fn -> restore_env("GITHUB_TOKEN", previous_token) end)
+
+    gh_token_fun = fn hostname ->
+      send(self(), {:github_gh_token_requested, hostname})
+      {:ok, " gh-token\n"}
+    end
+
+    assert {:ok,
+            %{
+              api_url: "https://api.github.com",
+              repo: "octo/repo",
+              token: "gh-token"
+            }} =
+             GitHubClient.resolve_settings_for_test(
+               tracker_settings(%{"token" => nil}),
+               gh_token_fun
+             )
+
+    assert_receive {:github_gh_token_requested, "github.com"}
+
+    assert {:ok, %{token: "enterprise-token"}} =
+             GitHubClient.resolve_settings_for_test(
+               tracker_settings(%{
+                 "api_url" => "https://github.example.com/api/v3",
+                 "token" => "$UNSET_GITHUB_TOKEN"
+               }),
+               fn hostname ->
+                 send(self(), {:github_enterprise_gh_token_requested, hostname})
+                 {:ok, "enterprise-token"}
+               end
+             )
+
+    assert_receive {:github_enterprise_gh_token_requested, "github.example.com"}
+
+    assert {:error, :missing_github_auth} =
+             GitHubClient.resolve_settings_for_test(
+               tracker_settings(%{"token" => nil}),
+               fn _hostname -> {:error, :missing_github_auth} end
+             )
+
+    assert {:ok, %{token: "configured-token"}} =
+             GitHubClient.resolve_settings_for_test(
+               tracker_settings(%{"token" => "configured-token"}),
+               fn _hostname -> flunk("configured tokens must take precedence over gh auth") end
+             )
+  end
+
   test "client normalizes GitHub issues without dropping provider details" do
     issue = GitHubClient.normalize_issue_for_test(raw_issue(42), "octo/repo")
 
@@ -339,6 +430,7 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
     Enum.each(
       [
         :missing_github_token,
+        :missing_github_auth,
         {:github_api_request, :timeout},
         :unexpected_failure
       ],
