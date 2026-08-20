@@ -768,6 +768,134 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "startup cleanup removes workspaces for terminal or missing issues and preserves active ones" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-startup-cleanup-#{System.unique_integer([:positive])}"
+      )
+
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: test_root,
+        tracker_active_states: ["Todo", "In Progress"],
+        tracker_terminal_states: ["Done", "Canceled"],
+        poll_interval_ms: 30_000
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+        %Issue{id: "issue-done", identifier: "MT-1", state: "Done"},
+        %Issue{id: "issue-active", identifier: "MT-2", state: "In Progress"}
+      ])
+
+      done_workspace = Path.join(test_root, "MT-1")
+      active_workspace = Path.join(test_root, "MT-2")
+      missing_workspace = Path.join(test_root, "MT-3")
+      Enum.each([done_workspace, active_workspace, missing_workspace], &File.mkdir_p!/1)
+
+      orchestrator_name = Module.concat(__MODULE__, :StartupCleanupOrchestrator)
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      on_exit(fn ->
+        restore_app_env(:memory_tracker_issues, previous_memory_issues)
+
+        if Process.alive?(pid) do
+          Process.exit(pid, :normal)
+        end
+      end)
+
+      assert %Orchestrator.State{} = :sys.get_state(pid)
+
+      refute File.exists?(done_workspace)
+      assert File.exists?(active_workspace)
+      refute File.exists?(missing_workspace)
+    after
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "startup cleanup preserves all workspaces when the tracker fetch fails" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-startup-cleanup-error-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: test_root,
+        tracker_terminal_states: ["Done", "Canceled"],
+        poll_interval_ms: 30_000
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_fetch_error, :tracker_down)
+
+      workspace = Path.join(test_root, "MT-1")
+      File.mkdir_p!(workspace)
+
+      orchestrator_name = Module.concat(__MODULE__, :StartupCleanupErrorOrchestrator)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+          assert %Orchestrator.State{} = :sys.get_state(pid)
+          Process.exit(pid, :normal)
+        end)
+
+      assert File.exists?(workspace)
+      assert log =~ "Skipping startup workspace cleanup"
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_fetch_error)
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "startup cleanup skips the tracker entirely when no workspaces exist" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-startup-cleanup-empty-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: test_root,
+        poll_interval_ms: 30_000
+      )
+
+      # Any identifier fetch would fail loudly, proving none happens for an
+      # absent root and again for an empty root.
+      Application.put_env(:symphony_elixir, :memory_tracker_fetch_error, :tracker_down)
+
+      orchestrator_name = Module.concat(__MODULE__, :StartupCleanupEmptyOrchestrator)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          refute File.exists?(test_root)
+          {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+          assert %Orchestrator.State{} = :sys.get_state(pid)
+          Process.exit(pid, :normal)
+
+          File.mkdir_p!(test_root)
+          empty_name = Module.concat(__MODULE__, :StartupCleanupEmptyRootOrchestrator)
+          {:ok, empty_pid} = Orchestrator.start_link(name: empty_name)
+          assert %Orchestrator.State{} = :sys.get_state(empty_pid)
+          Process.exit(empty_pid, :normal)
+        end)
+
+      refute log =~ "Skipping startup workspace cleanup"
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_fetch_error)
+      File.rm_rf(test_root)
+    end
+  end
+
   test "reconcile updates running issue state for active issues" do
     issue_id = "issue-3"
 
@@ -1069,6 +1197,10 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
+    # The memory tracker keeps the first poll cycle instant so it cannot delay
+    # the retry-window measurement below.
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+
     issue_id = "issue-crash"
     ref = make_ref()
     orchestrator_name = Module.concat(__MODULE__, :CrashRetryOrchestrator)
@@ -1109,6 +1241,10 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "first abnormal worker exit waits before retrying" do
+    # The memory tracker keeps the first poll cycle instant so it cannot delay
+    # the retry-window measurement below.
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+
     issue_id = "issue-crash-initial"
     ref = make_ref()
     orchestrator_name = Module.concat(__MODULE__, :InitialCrashRetryOrchestrator)

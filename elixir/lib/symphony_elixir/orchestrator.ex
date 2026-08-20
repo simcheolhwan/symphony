@@ -69,14 +69,22 @@ defmodule SymphonyElixir.Orchestrator do
           codex_rate_limits: nil
         }
 
-        run_terminal_workspace_cleanup()
         state = schedule_tick(state, 0)
 
-        {:ok, state}
+        {:ok, state, {:continue, :terminal_workspace_cleanup}}
 
       {:error, reason} ->
         {:stop, reason}
     end
+  end
+
+  # Startup cleanup runs after init returns so supervisor start-up (HTTP server,
+  # dashboard) is not blocked, but still before the first tick message so it
+  # cannot race the first dispatch.
+  @impl true
+  def handle_continue(:terminal_workspace_cleanup, %State{} = state) do
+    run_terminal_workspace_cleanup()
+    {:noreply, state}
   end
 
   @impl true
@@ -1157,20 +1165,78 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp cleanup_issue_workspace(_issue_or_identifier, _worker_host), do: :ok
 
+  # Cleans up workspaces left behind for issues that reached a terminal state
+  # while the orchestrator was not running. The candidates are the workspace
+  # directories on disk (their names are the issue identifiers), so the tracker
+  # is only asked about those identifiers instead of every terminal issue in the
+  # project — no query at all when the workspace root is empty.
   defp run_terminal_workspace_cleanup do
-    case Tracker.fetch_issues_by_states(Config.settings!().tracker.terminal_states) do
-      {:ok, issues} ->
-        issues
-        |> Enum.each(fn
-          %Issue{} = issue ->
-            cleanup_issue_workspace(issue)
+    case collect_workspace_candidates() do
+      [] ->
+        :ok
 
-          _ ->
-            :ok
+      candidates ->
+        cleanup_workspace_candidates(candidates)
+    end
+  end
+
+  defp collect_workspace_candidates do
+    worker_hosts = Config.settings!().worker.ssh_hosts
+
+    [nil | worker_hosts]
+    |> Enum.flat_map(fn worker_host ->
+      case Workspace.list_workspace_names(worker_host) do
+        {:ok, names} ->
+          names
+
+        {:error, reason} ->
+          Logger.warning("Skipping startup workspace cleanup for worker_host=#{worker_host || "local"}; failed to list workspaces: #{inspect(reason)}")
+
+          []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp cleanup_workspace_candidates(candidates) do
+    case Tracker.fetch_issues_by_identifiers(candidates) do
+      {:ok, issues} ->
+        terminal_states = terminal_state_set()
+        issues_by_identifier = Map.new(issues, &{&1.identifier, &1})
+
+        Enum.each(candidates, fn candidate ->
+          cleanup_workspace_candidate(candidate, issues_by_identifier, terminal_states)
         end)
 
       {:error, reason} ->
-        Logger.warning("Skipping startup terminal workspace cleanup; failed to fetch terminal issues: #{inspect(reason)}")
+        Logger.warning("Skipping startup workspace cleanup; failed to fetch workspace issues: #{inspect(reason)}")
+    end
+  end
+
+  defp cleanup_workspace_candidate(candidate, issues_by_identifier, terminal_states) do
+    case Map.get(issues_by_identifier, candidate) do
+      %Issue{} = issue ->
+        if terminal_issue_state?(issue.state, terminal_states) do
+          Logger.info("Removing workspace for terminal issue: #{issue_context(issue)} state=#{issue.state}")
+          cleanup_issue_workspace(issue)
+        end
+
+      nil ->
+        cleanup_missing_workspace_candidate(candidate)
+    end
+  end
+
+  # Directory names that are not tracker identifiers never reach the tracker
+  # query, so their absence from the result proves nothing — preserve them. For
+  # real identifiers a successful fetch that omits them is an authoritative "no
+  # such issue" (e.g. deleted from the tracker), which is the only way their
+  # leftover workspaces ever get cleaned up.
+  defp cleanup_missing_workspace_candidate(candidate) do
+    if Tracker.identifier_candidate?(candidate) do
+      Logger.info("Removing workspace without tracker issue: issue_identifier=#{candidate}")
+      cleanup_issue_workspace(candidate)
+    else
+      Logger.debug("Preserving workspace with unrecognized name: issue_identifier=#{candidate}")
     end
   end
 

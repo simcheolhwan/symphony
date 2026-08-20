@@ -450,4 +450,17 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
       assert :ok = SymphonyElixir.WorkflowStore.force_reload()
     end
   end
+
+  test "adapter fetches issues by identifiers via numeric ids" do
+    Application.put_env(:symphony_elixir, :github_client_module, FakeGitHubClient)
+
+    assert {:ok, ["123", "7"]} =
+             GitHubAdapter.fetch_issues_by_identifiers(["GH-123", "GH-7", "GH-x", "OTHER-1", "GH-"])
+
+    assert_receive {:github_ids_called, ["123", "7"]}
+
+    assert GitHubAdapter.identifier_candidate?("GH-123")
+    refute GitHubAdapter.identifier_candidate?("GH-x")
+    refute GitHubAdapter.identifier_candidate?("OTHER-1")
+  end
 end

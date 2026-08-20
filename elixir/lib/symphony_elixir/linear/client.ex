@@ -96,6 +96,47 @@ defmodule SymphonyElixir.Linear.Client do
   }
   """
 
+  @query_by_identifiers """
+  query SymphonyLinearIssuesByIdentifier($teamKey: String!, $numbers: [Float!]!, $first: Int!, $relationFirst: Int!) {
+    issues(filter: {team: {key: {eq: $teamKey}}, number: {in: $numbers}}, first: $first) {
+      nodes {
+        id
+        identifier
+        title
+        description
+        priority
+        state {
+          name
+        }
+        branchName
+        url
+        assignee {
+          id
+        }
+        labels {
+          nodes {
+            name
+          }
+        }
+        inverseRelations(first: $relationFirst) {
+          nodes {
+            type
+            issue {
+              id
+              identifier
+              state {
+                name
+              }
+            }
+          }
+        }
+        createdAt
+        updatedAt
+      }
+    }
+  }
+  """
+
   @viewer_query """
   query SymphonyLinearViewer {
     viewer {
@@ -132,6 +173,28 @@ defmodule SymphonyElixir.Linear.Client do
         with {:ok, tracker} <- configured_tracker_for_read(),
              {:ok, assignee_filter} <- routing_assignee_filter() do
           do_fetch_issue_states(ids, tracker.project_slug, assignee_filter)
+        end
+    end
+  end
+
+  @doc """
+  Fetches issues by human-readable identifiers such as `EXP-1157`.
+
+  Identifiers that do not parse as `TEAMKEY-number` are skipped, so they never
+  appear in a successful result. Requested identifiers absent from a successful
+  result do not exist in the tracker; any request failure aborts the whole fetch
+  without partial results.
+  """
+  @spec fetch_issues_by_identifiers([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_identifiers(identifiers) when is_list(identifiers) do
+    case parse_identifiers(identifiers) do
+      [] ->
+        {:ok, []}
+
+      parsed ->
+        with {:ok, _tracker} <- configured_tracker_for_read(),
+             {:ok, assignee_filter} <- routing_assignee_filter() do
+          do_fetch_by_identifiers(parsed, assignee_filter, &graphql/2)
         end
     end
   end
@@ -214,6 +277,97 @@ defmodule SymphonyElixir.Linear.Client do
 
       ids ->
         do_fetch_issue_states(ids, "test-project", nil, graphql_fun)
+    end
+  end
+
+  @doc false
+  @spec fetch_issues_by_identifiers_for_test(
+          [String.t()],
+          (String.t(), map() -> {:ok, map()} | {:error, term()})
+        ) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_identifiers_for_test(identifiers, graphql_fun)
+      when is_list(identifiers) and is_function(graphql_fun, 2) do
+    case parse_identifiers(identifiers) do
+      [] -> {:ok, []}
+      parsed -> do_fetch_by_identifiers(parsed, nil, graphql_fun)
+    end
+  end
+
+  defp parse_identifiers(identifiers) do
+    identifiers
+    |> Enum.uniq()
+    |> Enum.flat_map(fn identifier ->
+      case parse_identifier(identifier) do
+        {:ok, team_key, number} -> [{team_key, number}]
+        :error -> []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  # Linear identifiers are an uppercase team key plus an issue number. Anything
+  # else (including hash-suffixed workspace directory names) must not reach the
+  # tracker query, so callers can preserve whatever it referred to.
+  @identifier_regex ~r/^([A-Z][A-Z0-9]*)-([0-9]+)$/
+
+  @spec issue_identifier?(String.t()) :: boolean()
+  def issue_identifier?(identifier) when is_binary(identifier),
+    do: Regex.match?(@identifier_regex, identifier)
+
+  defp parse_identifier(identifier) when is_binary(identifier) do
+    case Regex.run(@identifier_regex, identifier) do
+      [_, team_key, number] -> {:ok, team_key, String.to_integer(number)}
+      _ -> :error
+    end
+  end
+
+  defp do_fetch_by_identifiers(parsed, assignee_filter, graphql_fun) do
+    parsed
+    |> Enum.group_by(fn {team_key, _number} -> team_key end, fn {_team_key, number} -> number end)
+    |> Enum.sort()
+    |> do_fetch_identifier_groups(assignee_filter, graphql_fun, [])
+  end
+
+  defp do_fetch_identifier_groups([], _assignee_filter, _graphql_fun, acc_issues) do
+    {:ok, finalize_paginated_issues(acc_issues)}
+  end
+
+  defp do_fetch_identifier_groups([{team_key, numbers} | rest], assignee_filter, graphql_fun, acc_issues) do
+    case do_fetch_identifier_batches(team_key, numbers, assignee_filter, graphql_fun, acc_issues) do
+      {:ok, updated_acc} ->
+        do_fetch_identifier_groups(rest, assignee_filter, graphql_fun, updated_acc)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_fetch_identifier_batches(_team_key, [], _assignee_filter, _graphql_fun, acc_issues) do
+    {:ok, acc_issues}
+  end
+
+  defp do_fetch_identifier_batches(team_key, numbers, assignee_filter, graphql_fun, acc_issues) do
+    {batch_numbers, rest_numbers} = Enum.split(numbers, @issue_page_size)
+
+    case graphql_fun.(@query_by_identifiers, %{
+           teamKey: team_key,
+           numbers: batch_numbers,
+           first: length(batch_numbers),
+           relationFirst: @issue_page_size
+         }) do
+      {:ok, body} ->
+        with {:ok, issues} <- decode_linear_response_strict(body, assignee_filter) do
+          do_fetch_identifier_batches(
+            team_key,
+            rest_numbers,
+            assignee_filter,
+            graphql_fun,
+            prepend_page_issues(issues, acc_issues)
+          )
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

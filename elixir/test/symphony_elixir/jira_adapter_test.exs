@@ -606,4 +606,17 @@ defmodule SymphonyElixir.Jira.AdapterTest do
       assert :ok = SymphonyElixir.WorkflowStore.force_reload()
     end
   end
+
+  test "adapter fetches issues by identifiers using issue keys" do
+    Application.put_env(:symphony_elixir, :jira_client_module, FakeJiraClient)
+
+    assert {:ok, ["MT-1", "OPS2-9"]} =
+             JiraAdapter.fetch_issues_by_identifiers(["MT-1", "OPS2-9", "mt-1", "MT_1--0123456789abcdef", ""])
+
+    assert_receive {:jira_ids_called, ["MT-1", "OPS2-9"]}
+
+    assert JiraAdapter.identifier_candidate?("MT-1")
+    refute JiraAdapter.identifier_candidate?("mt-1")
+    refute JiraAdapter.identifier_candidate?("MT_1--0123456789abcdef")
+  end
 end

@@ -498,4 +498,17 @@ defmodule SymphonyElixir.GitLab.AdapterTest do
       assert :ok = SymphonyElixir.WorkflowStore.force_reload()
     end
   end
+
+  test "adapter fetches issues by identifiers via numeric ids" do
+    Application.put_env(:symphony_elixir, :gitlab_client_module, FakeGitLabClient)
+
+    assert {:ok, ["123", "7"]} =
+             GitLabAdapter.fetch_issues_by_identifiers(["GL-123", "GL-7", "GL-x", "OTHER-1", "GL-"])
+
+    assert_receive {:gitlab_ids_called, ["123", "7"]}
+
+    assert GitLabAdapter.identifier_candidate?("GL-123")
+    refute GitLabAdapter.identifier_candidate?("GL-x")
+    refute GitLabAdapter.identifier_candidate?("OTHER-1")
+  end
 end
