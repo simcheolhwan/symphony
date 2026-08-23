@@ -1,0 +1,18 @@
+packages:
+  - launcher
+  - notifier
+
+catalog:
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.9
+
+overrides:
+  vite@*: "catalog:"
+
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: "*"
+
+allowBuilds:
+  "@simcheolhwan/oxlint-config@git+https://github.com/simcheolhwan/oxlint-config.git": true

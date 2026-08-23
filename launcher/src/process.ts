@@ -2,30 +2,41 @@ import { spawn } from "node:child_process"
 import { constants } from "node:fs"
 import { access } from "node:fs/promises"
 import { resolve } from "node:path"
-import { ROOT } from "./constants.mts"
-import { isRecord } from "./guards.mts"
+
+import { ROOT } from "./constants.ts"
+import { isRecord } from "./guards.ts"
+
+const findExecutableInDirectories = async (
+  command: string,
+  directories: string[],
+  index: number,
+): Promise<string> => {
+  const directory = directories[index]
+  if (directory === undefined) {
+    throw new Error(`PATH에서 명령어를 찾을 수 없습니다: ${command}`)
+  }
+  const candidate = resolve(directory || ".", command)
+  try {
+    await access(candidate, constants.X_OK)
+    return candidate
+  } catch (error) {
+    if (isRecord(error) && (error["code"] === "ENOENT" || error["code"] === "EACCES")) {
+      return findExecutableInDirectories(command, directories, index + 1)
+    }
+    throw error
+  }
+}
 
 export const findExecutable = async (command: string): Promise<string> => {
   const pathValue = process.env["PATH"]
   if (pathValue === undefined) {
     throw new Error("PATH가 설정되지 않았습니다.")
   }
-  for (const directory of pathValue.split(":")) {
-    const candidate = resolve(directory || ".", command)
-    try {
-      await access(candidate, constants.X_OK)
-      return candidate
-    } catch (error) {
-      if (isRecord(error) && (error["code"] === "ENOENT" || error["code"] === "EACCES")) {
-        continue
-      }
-      throw error
-    }
-  }
-  throw new Error(`PATH에서 명령어를 찾을 수 없습니다: ${command}`)
+  const executable = await findExecutableInDirectories(command, pathValue.split(":"), 0)
+  return executable
 }
 
-export const runProcess = async (
+export const runProcess = (
   command: string,
   args: string[],
   stdio: "inherit" | "capture",

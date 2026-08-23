@@ -52,9 +52,11 @@ SPEC.md       # 업스트림 소유
 
 `elixir/` 테스트는 `mise -C elixir exec -- mix test --exclude timing`으로 돌린다. `:timing` 태그가 붙은 세 테스트는 여유가 100ms 이내라 머신 부하에 따라 실패하고, 한 건만 실패해도 애플리케이션이 내려가 이후 파일이 전부 연쇄 실패한다. 제외하지 않으면 실패가 100건을 넘겨 회귀 여부를 판별할 수 없다. `elixir/AGENTS.md`의 `make all`은 `ci`를 경유해 `mix test --cover`를 실행하며 이 제외를 적용하지 않으므로 테스트 게이트로는 위 명령을 우선한다.
 
+`launcher/`와 `notifier/`의 TypeScript 정적 검사는 저장소 루트에서 `pnpm check`로 실행한다. 이 명령은 Vite+를 통해 oxfmt 포맷 검사, oxlint 린트, 타입 검사를 함께 실행한다. 자동 수정 가능한 포맷과 린트 문제를 함께 적용할 때는 `pnpm check:fix`를 쓴다.
+
 ## 실행
 
-런처는 `launcher/symphonyctl.mts`다. 명령, 로컬 설정 파일(`~/.config/symphony/`), 주입 환경변수, 프로세스 모델은 [`launcher/README.md`](launcher/README.md)를 따른다.
+런처의 진입점은 `launcher/src/symphonyctl.ts`다. 명령, 로컬 설정 파일(`~/.config/symphony/`), 주입 환경변수, 프로세스 모델은 [`launcher/README.md`](launcher/README.md)를 따른다.
 
 런처가 실행하는 본체는 `elixir/bin/symphony` escript다. 추적하지 않는 빌드 산출물이고 런처는 최신 여부를 알 수 없으므로, `elixir/` 소스나 워크플로 frontmatter가 쓰는 설정 규격을 바꿨으면 `mise -C elixir exec -- mix escript.build`로 다시 빌드한 뒤 인스턴스를 재시작한다. 오래된 escript는 새 설정값을 모른 채 부팅에 실패하고 PM2 재시작 한도까지 반복한다.
 

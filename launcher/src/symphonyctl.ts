@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { runList } from "./list.mts"
-import { runForeground, runLogs, runNotifierLogs } from "./logs.mts"
-import { WORKFLOW_NAMES, isWorkflowName, requireAlias } from "./registry.mts"
-import type { WorkflowName } from "./registry.mts"
-import { runNotifier, runStartOrRestart, runStop } from "./runners.mts"
+import { runList } from "./list.ts"
+import { runForeground, runLogs, runNotifierLogs } from "./logs.ts"
+import { WORKFLOW_NAMES, isWorkflowName, requireAlias } from "./registry.ts"
+import type { WorkflowName } from "./registry.ts"
+import { runNotifier, runStartOrRestart, runStop } from "./runners.ts"
 
 const COMMANDS = ["start", "stop", "restart", "ls", "logs", "run", "notifier"] as const
 type Command = (typeof COMMANDS)[number]
@@ -53,19 +53,9 @@ const parseWorkflowOption = (value: string | undefined): WorkflowName => {
   return value
 }
 
-const parseCommand = (argv: string[]): ParsedCommand | undefined => {
-  if (argv.length === 0 || (argv.length === 1 && argv[0] === "help")) {
-    return undefined
-  }
-
-  const command = argv[0]
-  if (!isCommand(command)) {
-    throw new Error(`알 수 없는 명령어입니다: ${command}`)
-  }
-
-  const args = argv.slice(1)
+const parseCommandArguments = (args: string[]): Omit<ParsedCommand, "command"> => {
   const aliases: string[] = []
-  let workflow: WorkflowName | undefined
+  let workflow: WorkflowName | undefined = undefined
   let all = false
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]
@@ -83,29 +73,47 @@ const parseCommand = (argv: string[]): ParsedCommand | undefined => {
     }
     aliases.push(requireAlias(arg))
   }
+  return { aliases, workflow, all }
+}
 
+const validateCommand = ({ command, aliases, workflow, all }: ParsedCommand): void => {
   if (command === "ls" && (aliases.length > 0 || workflow !== undefined || all)) {
     throw new Error("ls 명령어는 추가 인자를 받지 않습니다.")
   }
   if (command === "notifier" && (workflow !== undefined || all)) {
     throw new Error("notifier 명령어는 --workflow와 --all을 받지 않습니다.")
   }
-  if (command === "logs" || command === "run") {
-    if (aliases.length !== 1 || workflow === undefined || all) {
-      throw new Error(`${command} 명령어에는 별칭 하나와 --workflow가 필요합니다.`)
-    }
+  if (
+    (command === "logs" || command === "run") &&
+    (aliases.length !== 1 || workflow === undefined || all)
+  ) {
+    throw new Error(`${command} 명령어에는 별칭 하나와 --workflow가 필요합니다.`)
   }
   if (command === "start" && aliases.length === 0 && !all) {
     throw new Error("start 명령어에는 별칭 또는 --all이 필요합니다.")
   }
   if ((command === "stop" || command === "restart") && all) {
-    throw new Error(`${command} 명령어는 --all을 받지 않습니다. 별칭을 생략하면 실행 중인 인스턴스 전체가 대상입니다.`)
+    throw new Error(
+      `${command} 명령어는 --all을 받지 않습니다. 별칭을 생략하면 실행 중인 인스턴스 전체가 대상입니다.`,
+    )
   }
   if (all && aliases.length > 0) {
     throw new Error("--all과 별칭은 함께 지정할 수 없습니다.")
   }
+}
 
-  return { command, aliases, workflow, all }
+const parseCommand = (argv: string[]): ParsedCommand | undefined => {
+  if (argv.length === 0 || (argv.length === 1 && argv[0] === "help")) {
+    return undefined
+  }
+
+  const [command] = argv
+  if (!isCommand(command)) {
+    throw new Error(`알 수 없는 명령어입니다: ${command}`)
+  }
+  const parsed = { command, ...parseCommandArguments(argv.slice(1)) }
+  validateCommand(parsed)
+  return parsed
 }
 
 const singleAlias = (aliases: string[]): string => {
@@ -123,10 +131,14 @@ const singleWorkflow = (workflow: WorkflowName | undefined): WorkflowName => {
   return workflow
 }
 
+const unreachableCommand = (command: never): never => {
+  throw new Error(`처리할 수 없는 명령어입니다: ${String(command)}`)
+}
+
 const main = async (): Promise<number> => {
   const parsed = parseCommand(process.argv.slice(2))
   if (parsed === undefined) {
-    console.log(USAGE)
+    console.info(USAGE)
     return 0
   }
 
@@ -151,6 +163,8 @@ const main = async (): Promise<number> => {
       await runNotifier(action)
       return 0
     }
+    default:
+      return unreachableCommand(parsed.command)
   }
 }
 

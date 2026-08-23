@@ -1,8 +1,8 @@
-import { NOTIFIER_PROCESS_NAME, PROCESS_PREFIX } from "./constants.mts"
-import { formatUptime, readSymphonyProcesses } from "./pm2.mts"
-import { findExecutable } from "./process.mts"
-import { parseInstanceId } from "./registry.mts"
-import { STATUS_LABELS, printTable } from "./table.mts"
+import { NOTIFIER_PROCESS_NAME, PROCESS_PREFIX } from "./constants.ts"
+import { formatUptime, readSymphonyProcesses } from "./pm2.ts"
+import { findExecutable } from "./process.ts"
+import { parseInstanceId } from "./registry.ts"
+import { STATUS_LABELS, printTable } from "./table.ts"
 
 export const runList = async (): Promise<void> => {
   const pm2Path = await findExecutable("pm2")

@@ -8,7 +8,7 @@ flowchart LR
     P -->|mise exec| S[symphony escript]
 ```
 
-진입점은 `symphonyctl.mts` 단일 파일이다. Node 24의 네이티브 type stripping으로 그대로 실행하므로 빌드가 없고, `symphonyctl` 이름은 이 파일을 가리키는 심볼릭 링크나 셸 `alias`로 사용자가 만든다. PM2와 `mise`는 `PATH`에서 해석하므로 전역 설치가 필요하다.
+진입점은 `src/symphonyctl.ts`다. Node 24의 네이티브 type stripping으로 TypeScript를 그대로 실행하므로 빌드가 없다. PM2와 `mise`는 `PATH`에서 해석하므로 전역 설치가 필요하다.
 
 escript는 다음 인자로 기동한다.
 
@@ -91,15 +91,17 @@ symphonyctl notifier start|stop|restart|logs
 ## 코드 구조
 
 ```
-symphonyctl.mts  # 진입점: 명령 파싱과 분기
-registry.mts     # targets.json 파싱, 인스턴스 식별자와 프로세스 이름
-env.mts          # 공통 env 파일 파싱, 인스턴스 환경변수 조립
-runners.mts      # start/restart/stop과 알림 서버 기동
-pm2.mts          # pm2 jlist 파싱
-process.mts      # 실행 파일 탐색, 하위 프로세스 실행
-logs.mts         # logs, run, notifier logs
-list.mts         # ls 테이블
-table.mts        # 표 렌더링
-constants.mts    # 경로와 프로세스 접두사
-guards.mts       # 타입 가드
+package.json           # 독립 workspace package와 실행 스크립트
+tsconfig.json          # 런처 TypeScript 설정
+src/symphonyctl.ts     # 직접 실행 가능한 CLI 진입점, 명령 파싱과 분기
+src/registry.ts        # targets.json 파싱, 인스턴스 식별자와 프로세스 이름
+src/env.ts             # 공통 env 파일 파싱, 인스턴스 환경변수 조립
+src/runners.ts         # start/restart/stop과 알림 서버 기동
+src/pm2.ts             # pm2 jlist 파싱
+src/process.ts         # 실행 파일 탐색, 하위 프로세스 실행
+src/logs.ts            # logs, run, notifier logs
+src/list.ts            # ls 테이블
+src/table.ts           # 표 렌더링
+src/constants.ts       # 경로와 프로세스 접두사
+src/guards.ts          # 타입 가드
 ```

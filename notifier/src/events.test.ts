@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest"
 import { lifecycleEventSchema } from "./events.ts"
 
 const valid = {
@@ -38,7 +37,9 @@ describe("lifecycleEventSchema", () => {
   })
 
   it("dispatch_reasons가 문자열 배열이 아니면 거부한다", () => {
-    expect(lifecycleEventSchema.safeParse({ ...valid, dispatch_reasons: "3건" }).success).toBe(false)
+    expect(lifecycleEventSchema.safeParse({ ...valid, dispatch_reasons: "3건" }).success).toBe(
+      false,
+    )
     expect(lifecycleEventSchema.safeParse({ ...valid, dispatch_reasons: [3] }).success).toBe(false)
   })
 

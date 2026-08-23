@@ -1,6 +1,6 @@
-import { PROCESS_PREFIX } from "./constants.mts"
-import { isRecord } from "./guards.mts"
-import { runProcess } from "./process.mts"
+import { PROCESS_PREFIX } from "./constants.ts"
+import { isRecord } from "./guards.ts"
+import { runProcess } from "./process.ts"
 
 export interface Pm2Process {
   name: string
@@ -21,20 +21,23 @@ export const formatUptime = (startedAt: number): string => {
 
 const parseNumber = (value: unknown, field: string): number => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`pm2 jlist의 ${field} 값이 올바르지 않습니다.`)
+    throw new TypeError(`pm2 jlist의 ${field} 값이 올바르지 않습니다.`)
   }
   return value
 }
 
-const parsePm2Processes = (text: string): Pm2Process[] => {
-  let value: unknown
+const parsePm2Json = (text: string): unknown => {
   try {
-    value = JSON.parse(text)
+    return JSON.parse(text)
   } catch (error) {
     throw new Error("pm2 jlist가 유효한 JSON을 반환하지 않았습니다.", { cause: error })
   }
+}
+
+const parsePm2Processes = (text: string): Pm2Process[] => {
+  const value = parsePm2Json(text)
   if (!Array.isArray(value)) {
-    throw new Error("pm2 jlist 결과가 배열이 아닙니다.")
+    throw new TypeError("pm2 jlist 결과가 배열이 아닙니다.")
   }
   return value.map((entry, index) => {
     if (!isRecord(entry) || typeof entry["name"] !== "string" || !isRecord(entry["pm2_env"])) {
@@ -42,7 +45,7 @@ const parsePm2Processes = (text: string): Pm2Process[] => {
     }
     const environment = entry["pm2_env"]
     if (typeof environment["status"] !== "string") {
-      throw new Error(`pm2 jlist의 ${entry["name"]} 프로세스가 올바르지 않습니다.`)
+      throw new TypeError(`pm2 jlist의 ${entry["name"]} 프로세스가 올바르지 않습니다.`)
     }
     return {
       name: entry["name"],

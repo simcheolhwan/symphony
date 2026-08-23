@@ -124,7 +124,9 @@ pre,
 .mono,
 .numeric {
   font-variant-numeric: tabular-nums slashed-zero;
-  font-feature-settings: "tnum" 1, "zero" 1;
+  font-feature-settings:
+    "tnum" 1,
+    "zero" 1;
 }
 
 .app-shell {

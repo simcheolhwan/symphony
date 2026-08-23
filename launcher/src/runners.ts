@@ -2,11 +2,18 @@ import { constants } from "node:fs"
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { LOGS_ROOT, NOTIFIER_PROCESS_NAME, NOTIFIER_ROOT, PROCESS_PREFIX, ROOT } from "./constants.mts"
-import { buildEnv, buildNotifierEnv, readSharedEnv } from "./env.mts"
-import { formatUptime, readSymphonyProcesses } from "./pm2.mts"
-import type { Pm2Process } from "./pm2.mts"
-import { findExecutable, runProcess } from "./process.mts"
+
+import {
+  LOGS_ROOT,
+  NOTIFIER_PROCESS_NAME,
+  NOTIFIER_ROOT,
+  PROCESS_PREFIX,
+  ROOT,
+} from "./constants.ts"
+import { buildEnv, buildNotifierEnv, readSharedEnv } from "./env.ts"
+import { formatUptime, readSymphonyProcesses } from "./pm2.ts"
+import type { Pm2Process } from "./pm2.ts"
+import { findExecutable, runProcess } from "./process.ts"
 import {
   formatProcessName,
   formatRef,
@@ -18,8 +25,8 @@ import {
   readRegistry,
   selectInstances,
   workflowPath,
-} from "./registry.mts"
-import type { Instance, InstanceRef, Target, WorkflowName } from "./registry.mts"
+} from "./registry.ts"
+import type { Instance, InstanceRef, Target, WorkflowName } from "./registry.ts"
 
 // --port를 넘기지 않으므로 상태 대시보드는 시작되지 않는다. 작업 관측은 Slack 알림과 트래커가 맡는다.
 export const buildArgs = (instance: Instance): string[] => [
@@ -106,10 +113,13 @@ const runningRefs = (
 const resolveStartTargets = (
   registry: Map<string, Target>,
   processes: Map<string, Pm2Process>,
-  aliases: string[],
-  workflow: WorkflowName | undefined,
-  all: boolean,
+  options: {
+    aliases: string[]
+    workflow: WorkflowName | undefined
+    all: boolean
+  },
 ): Instance[] => {
+  const { aliases, workflow, all } = options
   if (all) {
     return Array.from(registry.values()).flatMap((target) => {
       if (workflow === undefined) return Array.from(target.instances.values())
@@ -124,6 +134,56 @@ const resolveStartTargets = (
   return runningRefs(processes, workflow).map((ref) => lookupInstance(registry, ref))
 }
 
+interface StartContext {
+  command: "start" | "restart"
+  pm2Path: string
+  misePath: string
+  processes: Map<string, Pm2Process>
+  sharedEnv: Record<string, string>
+}
+
+const startInstance = async (instance: Instance, context: StartContext): Promise<boolean> => {
+  const name = processName(instance.alias, instance.workflow)
+  const label = formatRef(instance)
+  const existing = context.processes.get(name)
+  if (context.command === "start" && existing?.status === "online") {
+    console.info(`${label}: 실행 중 (${formatUptime(existing.uptime)})`)
+    return false
+  }
+  if (existing !== undefined) {
+    await runProcess(context.pm2Path, ["delete", name], "inherit")
+  }
+  await startFromConfig(context.pm2Path, {
+    name,
+    script: context.misePath,
+    args: buildArgs(instance),
+    cwd: ROOT,
+    env: buildEnv(instance, context.sharedEnv),
+  })
+  console.info(`${label}: 시작됨`)
+  return true
+}
+
+const startInstances = async (instances: Instance[], context: StartContext): Promise<void> => {
+  let changed = false
+  const startNext = async (index: number): Promise<void> => {
+    const instance = instances[index]
+    if (instance === undefined) return
+    if (await startInstance(instance, context)) changed = true
+    await startNext(index + 1)
+  }
+
+  try {
+    await startNext(0)
+  } finally {
+    // 시작 도중 실패해도 그때까지 시작한 프로세스는 재부팅 후 복원되어야 한다.
+    if (changed) {
+      // --force를 사용해야 프로세스가 0개인 경우에도 현재 상태가 스냅샷에 반영된다.
+      await runProcess(context.pm2Path, ["save", "--force"], "inherit")
+    }
+  }
+}
+
 export const runStartOrRestart = async (
   command: "start" | "restart",
   aliases: string[],
@@ -135,47 +195,23 @@ export const runStartOrRestart = async (
   const misePath = await findExecutable("mise")
   const processes = await readSymphonyProcesses(pm2Path)
 
-  const instances = resolveStartTargets(registry, processes, aliases, workflow, all)
+  const instances = resolveStartTargets(registry, processes, { aliases, workflow, all })
   if (instances.length === 0) {
-    console.log("대상 인스턴스가 없습니다.")
+    console.info("대상 인스턴스가 없습니다.")
     return
   }
 
   const sharedEnv = await readSharedEnv()
-  for (const instance of instances) {
-    await requireWorkflowFile(instance)
-  }
+  await Promise.all(instances.map((instance) => requireWorkflowFile(instance)))
+  await startInstances(instances, { command, pm2Path, misePath, processes, sharedEnv })
+}
 
-  let changed = false
-  try {
-    for (const instance of instances) {
-      const name = processName(instance.alias, instance.workflow)
-      const label = formatRef(instance)
-      const existing = processes.get(name)
-      if (command === "start" && existing?.status === "online") {
-        console.log(`${label}: 실행 중 (${formatUptime(existing.uptime)})`)
-        continue
-      }
-      if (existing !== undefined) {
-        await runProcess(pm2Path, ["delete", name], "inherit")
-      }
-      await startFromConfig(pm2Path, {
-        name,
-        script: misePath,
-        args: buildArgs(instance),
-        cwd: ROOT,
-        env: buildEnv(instance, sharedEnv),
-      })
-      changed = true
-      console.log(`${label}: 시작됨`)
-    }
-  } finally {
-    // 시작 도중 실패해도 그때까지 시작한 프로세스는 재부팅 후 복원되어야 한다.
-    if (changed) {
-      // --force를 사용해야 프로세스가 0개인 경우에도 현재 상태가 스냅샷에 반영된다.
-      await runProcess(pm2Path, ["save", "--force"], "inherit")
-    }
-  }
+const stopProcesses = async (pm2Path: string, names: string[], index: number): Promise<void> => {
+  const name = names[index]
+  if (name === undefined) return
+  await runProcess(pm2Path, ["delete", name], "inherit")
+  console.info(`${formatProcessName(name)}: 중지됨`)
+  await stopProcesses(pm2Path, names, index + 1)
 }
 
 // 등록된 프로세스는 모두 실행 중이어야 하므로 중지는 pm2 stop이 아니라 delete로 등록을 해제한다.
@@ -194,14 +230,11 @@ export const runStop = async (
         : matchesProcess(name, undefined, workflow),
     )
   if (names.length === 0) {
-    console.log("대상 프로세스가 없습니다.")
+    console.info("대상 프로세스가 없습니다.")
     return
   }
 
-  for (const name of names) {
-    await runProcess(pm2Path, ["delete", name], "inherit")
-    console.log(`${formatProcessName(name)}: 중지됨`)
-  }
+  await stopProcesses(pm2Path, names, 0)
   await runProcess(pm2Path, ["save", "--force"], "inherit")
 }
 
@@ -222,17 +255,17 @@ export const runNotifier = async (action: "start" | "stop" | "restart"): Promise
 
   if (action === "stop") {
     if (existing === undefined) {
-      console.log("대상 프로세스가 없습니다.")
+      console.info("대상 프로세스가 없습니다.")
       return
     }
     await runProcess(pm2Path, ["delete", NOTIFIER_PROCESS_NAME], "inherit")
     await runProcess(pm2Path, ["save", "--force"], "inherit")
-    console.log("알림: 중지됨")
+    console.info("알림: 중지됨")
     return
   }
 
   if (action === "start" && existing?.status === "online") {
-    console.log(`알림: 실행 중 (${formatUptime(existing.uptime)})`)
+    console.info(`알림: 실행 중 (${formatUptime(existing.uptime)})`)
     return
   }
 
@@ -250,5 +283,5 @@ export const runNotifier = async (action: "start" | "stop" | "restart"): Promise
     env,
   })
   await runProcess(pm2Path, ["save", "--force"], "inherit")
-  console.log("알림: 시작됨")
+  console.info("알림: 시작됨")
 }
