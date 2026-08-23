@@ -1,4 +1,6 @@
-import { overflowKeys, parseThreads, serializeThreads } from "./slack.ts"
+import type { WebClient } from "@slack/web-api"
+
+import { SlackThreads, overflowKeys, parseThreads, serializeThreads } from "./slack.ts"
 
 describe("parseThreads", () => {
   it("저장 파일 내용을 매핑으로 되돌린다", () => {
@@ -16,8 +18,8 @@ describe("parseThreads", () => {
     expect(parseThreads("null")).toEqual(new Map())
   })
 
-  it("ts가 문자열이 아닌 항목은 버린다", () => {
-    const text = '{"a":"1700000000.000100","b":42,"c":""}'
+  it("형식이 잘못된 ts만 버리고 유효한 매핑은 복원한다", () => {
+    const text = '{"a":"1700000000.000100","b":42,"c":"","d":"not-a-timestamp"}'
     expect(parseThreads(text)).toEqual(new Map([["a", "1700000000.000100"]]))
   })
 
@@ -27,6 +29,26 @@ describe("parseThreads", () => {
       ["b", "1700000000.000200"],
     ])
     expect(parseThreads(serializeThreads(threads))).toEqual(threads)
+  })
+})
+
+describe("SlackThreads.post", () => {
+  it("Slack 응답의 ts 형식을 검증한다", async () => {
+    const postMessage = vi.fn<() => Promise<{ ts: string }>>().mockResolvedValue({ ts: "invalid" })
+    const client = { chat: { postMessage } } as unknown as WebClient
+    const threads = new SlackThreads(client, "C0123456789")
+
+    await expect(threads.post("message")).rejects.toThrow(
+      "chat.postMessage response has invalid ts",
+    )
+  })
+
+  it("Slack 응답에 ts가 없다는 기존 오류 문맥을 유지한다", async () => {
+    const postMessage = vi.fn<() => Promise<object>>().mockResolvedValue({})
+    const client = { chat: { postMessage } } as unknown as WebClient
+    const threads = new SlackThreads(client, "C0123456789")
+
+    await expect(threads.post("message")).rejects.toThrow("chat.postMessage response has no ts")
   })
 })
 

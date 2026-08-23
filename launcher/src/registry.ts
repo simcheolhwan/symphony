@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 
+import { z } from "zod"
+
 import { PROCESS_PREFIX, REGISTRY_PATH, ROOT } from "./constants.ts"
-import { isRecord } from "./guards.ts"
 
 const DEFAULT_EFFORT = "xhigh"
 
@@ -38,12 +39,13 @@ export interface InstanceRef {
 }
 
 const ALIAS_PATTERN = /^[a-z0-9-]+$/
+const aliasSchema = z.string().regex(ALIAS_PATTERN)
 
 export const isWorkflowName = (value: string): value is WorkflowName =>
   WORKFLOW_NAMES.some((name) => name === value)
 
 export const requireAlias = (value: string): string => {
-  if (!ALIAS_PATTERN.test(value)) {
+  if (!aliasSchema.safeParse(value).success) {
     throw new Error(`별칭은 소문자, 숫자, -로만 이루어져야 합니다: ${value}`)
   }
   return value
@@ -79,20 +81,19 @@ export const instanceName = (instance: Instance): string =>
 export const workflowPath = (instance: Instance): string =>
   join(ROOT, "workflows", `${instance.workflow}.md`)
 
-const requireString = (record: Record<string, unknown>, field: string, context: string): string => {
-  const value = record[field]
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${context}의 ${field} 값이 비어 있지 않은 문자열이어야 합니다.`)
-  }
-  return value.trim()
+const requiredString = (field: string, context: string): z.ZodString => {
+  const message = `${context}의 ${field} 값이 비어 있지 않은 문자열이어야 합니다.`
+  return z.string(message).trim().min(1, message)
 }
 
-const optionalString = (
-  record: Record<string, unknown>,
-  field: string,
-  context: string,
-): string | undefined =>
-  record[field] === undefined ? undefined : requireString(record, field, context)
+const parseSchema = <Output>(schema: z.ZodType<Output>, value: unknown): Output => {
+  const result = schema.safeParse(value)
+  if (!result.success) {
+    const message = result.error.issues[0]?.message ?? "설정 형식이 올바르지 않습니다."
+    throw new Error(message, { cause: result.error })
+  }
+  return result.data
+}
 
 interface TargetFields {
   alias: string
@@ -105,14 +106,23 @@ const parseInstance = (target: TargetFields, name: string, config: unknown): Ins
     throw new Error(`${target.alias} target에 알 수 없는 워크플로가 있습니다: ${name}`)
   }
   const context = `${target.alias} target의 ${name} 워크플로`
-  if (!isRecord(config)) {
-    throw new Error(`${context} 설정이 객체가 아닙니다.`)
-  }
+  const parsed = parseSchema(
+    z.object(
+      {
+        model: requiredString("model", context).optional(),
+        model_reasoning_effort: requiredString("model_reasoning_effort", context).default(
+          DEFAULT_EFFORT,
+        ),
+      },
+      `${context} 설정이 객체가 아닙니다.`,
+    ),
+    config,
+  )
   const fields: InstanceFields = {
     alias: target.alias,
     repo: target.repo,
-    model: optionalString(config, "model", context),
-    effort: optionalString(config, "model_reasoning_effort", context) ?? DEFAULT_EFFORT,
+    model: parsed.model,
+    effort: parsed.model_reasoning_effort,
   }
   if (name !== "linear") {
     return { ...fields, workflow: name }
@@ -125,19 +135,22 @@ const parseInstance = (target: TargetFields, name: string, config: unknown): Ins
 
 const parseTarget = (alias: string, value: unknown): Target => {
   requireAlias(alias)
-  if (!isRecord(value)) {
-    throw new Error(`${alias} target 설정이 객체가 아닙니다.`)
-  }
-  const repo = requireString(value, "repo", `${alias} target`)
-  const project = optionalString(value, "project", `${alias} target`)
-  const { workflows } = value
-  if (!isRecord(workflows)) {
-    throw new Error(`${alias} target의 workflows가 객체가 아닙니다.`)
-  }
+  const context = `${alias} target`
+  const parsed = parseSchema(
+    z.object(
+      {
+        repo: requiredString("repo", context),
+        project: requiredString("project", context).optional(),
+        workflows: z.record(z.string(), z.unknown(), `${context}의 workflows가 객체가 아닙니다.`),
+      },
+      `${context} 설정이 객체가 아닙니다.`,
+    ),
+    value,
+  )
 
-  const target = { alias, repo, project }
+  const target = { alias, repo: parsed.repo, project: parsed.project }
   const instances = new Map<WorkflowName, Instance>()
-  for (const [name, config] of Object.entries(workflows)) {
+  for (const [name, config] of Object.entries(parsed.workflows)) {
     const instance = parseInstance(target, name, config)
     instances.set(instance.workflow, instance)
   }
@@ -159,20 +172,23 @@ const parseRegistryJson = (text: string): Record<string, unknown> => {
   } catch (error) {
     throw new Error(`${REGISTRY_PATH}가 유효한 JSON이 아닙니다.`, { cause: error })
   }
-  if (!isRecord(parsed)) {
-    throw new Error(`${REGISTRY_PATH}의 최상위 값이 객체가 아닙니다.`)
-  }
-  return parsed
+  return parseSchema(
+    z.record(z.string(), z.unknown(), `${REGISTRY_PATH}의 최상위 값이 객체가 아닙니다.`),
+    parsed,
+  )
 }
 
-export const readRegistry = async (): Promise<Map<string, Target>> => {
-  const parsed = parseRegistryJson(await readRegistryFile())
+export const parseRegistry = (text: string): Map<string, Target> => {
+  const parsed = parseRegistryJson(text)
   const registry = new Map<string, Target>()
   for (const [alias, value] of Object.entries(parsed)) {
     registry.set(alias, parseTarget(alias, value))
   }
   return registry
 }
+
+export const readRegistry = async (): Promise<Map<string, Target>> =>
+  parseRegistry(await readRegistryFile())
 
 export const lookupTarget = (registry: Map<string, Target>, alias: string): Target => {
   const target = registry.get(alias)

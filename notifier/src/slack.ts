@@ -3,6 +3,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
 import type { ChatPostMessageArguments, WebClient } from "@slack/web-api"
+import { z } from "zod"
 
 export const THREADS_PATH = join(homedir(), ".config", "symphony", "notifier-threads.json")
 
@@ -14,6 +15,11 @@ export type MessageBlocks = Extract<ChatPostMessageArguments, { blocks: unknown 
 // 상한에서 밀려난 작업의 이벤트는 새 본문으로 시작한다. 항목 하나가 짧은 문자열
 // 두 개라 500개는 파일 크기와 메모리 모두 무시할 수 있는 수준이다.
 const MAX_THREADS = 500
+
+const slackTimestampSchema = z
+  .string()
+  .regex(/^\d+\.\d{6}$/, "Slack 메시지 타임스탬프 형식이어야 합니다.")
+const threadMappingSchema = z.record(z.string(), z.unknown())
 
 async function readThreadMapping(): Promise<string | null> {
   try {
@@ -82,16 +88,20 @@ export class SlackThreads {
    * blocks를 함께 보내면 text는 알림 미리보기와 스크린리더 폴백으로 쓰인다.
    */
   async post(text: string, threadTs?: string, blocks?: MessageBlocks): Promise<string> {
-    const result = await this.client.chat.postMessage({
+    const response = await this.client.chat.postMessage({
       channel: this.channel,
       text,
       ...(threadTs === undefined ? {} : { thread_ts: threadTs }),
       ...(blocks === undefined ? {} : { blocks }),
     })
-    if (result.ts === undefined) {
+    if (response.ts === undefined) {
       throw new Error("chat.postMessage response has no ts")
     }
-    return result.ts
+    const result = slackTimestampSchema.safeParse(response.ts)
+    if (!result.success) {
+      throw new Error("chat.postMessage response has invalid ts", { cause: result.error })
+    }
+    return result.data
   }
 
   // 키별 게시 체인은 서로 병렬이라 저장이 겹칠 수 있다. 단일 쓰기 체인으로
@@ -142,10 +152,13 @@ export function parseThreads(text: string): Map<string, string> {
     return threads
   }
 
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return threads
+  const mapping = threadMappingSchema.safeParse(parsed)
+  if (!mapping.success) return threads
 
-  for (const [key, ts] of Object.entries(parsed)) {
-    if (typeof ts === "string" && ts !== "") threads.set(key, ts)
+  // 한 항목이 손상돼도 나머지 작업은 기존 Slack 스레드를 이어 쓴다.
+  for (const [key, ts] of Object.entries(mapping.data)) {
+    const timestamp = slackTimestampSchema.safeParse(ts)
+    if (timestamp.success) threads.set(key, timestamp.data)
   }
   return threads
 }

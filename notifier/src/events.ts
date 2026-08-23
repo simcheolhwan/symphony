@@ -4,24 +4,28 @@ import { z } from "zod"
 import type { SlackThreads } from "./slack.ts"
 import { bodyText, replyBlocks, replyText } from "./templates.ts"
 
+const nonEmptyString = z
+  .string()
+  .refine((value) => value.trim() !== "", "비어 있지 않은 문자열이어야 합니다.")
+
 // event는 열린 집합이다. 정의되지 않은 종류도 통과시켜 발신 측이 종류를
 // 추가해도 수신 측 수정이 필요 없게 한다.
 export const lifecycleEventSchema = z.object({
-  instance: z.string().min(1),
-  workflow: z.string().optional(),
-  target: z.string().optional(),
-  event: z.string().min(1),
-  reason: z.string().optional(),
-  dispatch_reasons: z.array(z.string()).optional(),
-  observed: z.array(z.string()).optional(),
-  agent_message: z.string().optional(),
+  instance: nonEmptyString,
+  workflow: nonEmptyString.optional(),
+  target: nonEmptyString.optional(),
+  event: nonEmptyString,
+  reason: nonEmptyString.optional(),
+  dispatch_reasons: z.array(nonEmptyString).optional(),
+  observed: z.array(nonEmptyString).optional(),
+  agent_message: nonEmptyString.optional(),
   issue: z.object({
-    id: z.string().min(1),
-    identifier: z.string().min(1),
-    title: z.string().optional(),
-    url: z.url(),
-    state: z.string().min(1),
-    pr_author: z.string().optional(),
+    id: nonEmptyString,
+    identifier: nonEmptyString,
+    title: nonEmptyString.optional(),
+    url: z.url({ protocol: /^https?$/ }),
+    state: nonEmptyString,
+    pr_author: nonEmptyString.optional(),
   }),
 })
 

@@ -18,6 +18,12 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...valid, SYMPHONY_NOTIFY_URL: "http://127.0.0.1:4123" }).path).toBe("/")
   })
 
+  it("발신자와 같이 URL 양끝 공백을 제거하고 명시된 기본 포트를 허용한다", () => {
+    const config = loadConfig({ ...valid, SYMPHONY_NOTIFY_URL: " http://127.0.0.1:80/events " })
+    expect(config.port).toBe(80)
+    expect(config.path).toBe("/events")
+  })
+
   it("127.0.0.1이 아닌 호스트를 거부한다", () => {
     expect(() =>
       loadConfig({ ...valid, SYMPHONY_NOTIFY_URL: "http://10.0.0.1:4123/events" }),
@@ -34,12 +40,27 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...valid, SYMPHONY_NOTIFY_URL: "http://127.0.0.1/events" })).toThrow(
       "포트가 명시되어야 합니다.",
     )
+    expect(() =>
+      loadConfig({ ...valid, SYMPHONY_NOTIFY_URL: "http://127.0.0.1:0/events" }),
+    ).toThrow("포트가 명시되어야 합니다.")
   })
 
   it("http가 아닌 스킴을 거부한다", () => {
     expect(() =>
       loadConfig({ ...valid, SYMPHONY_NOTIFY_URL: "https://127.0.0.1:4123/events" }),
     ).toThrow("http 스킴이어야 합니다.")
+  })
+
+  it("발신자가 거부하는 사용자 정보 포함 URL을 거부한다", () => {
+    expect(() =>
+      loadConfig({ ...valid, SYMPHONY_NOTIFY_URL: "http://user@127.0.0.1:4123/events" }),
+    ).toThrow("사용자 정보가 없어야 합니다.")
+  })
+
+  it("형식이 아닌 채널 ID를 거부한다", () => {
+    expect(() => loadConfig({ ...valid, SYMPHONY_SLACK_CHANNEL: "notifications" })).toThrow(
+      "Slack 채널 ID 형식이어야 합니다.",
+    )
   })
 
   it("형식이 아닌 사용자 ID를 거부한다", () => {

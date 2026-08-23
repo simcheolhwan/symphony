@@ -4,6 +4,7 @@ packages:
 
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.9
+  zod: ^4.4.3
 
 overrides:
   vite@*: "catalog:"

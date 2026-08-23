@@ -139,7 +139,8 @@ defmodule SymphonyElixir.NotifierTest do
           "https://127.0.0.1:#{port}/symphony/events",
           "http://localhost:#{port}/symphony/events",
           "http://127.0.0.1/symphony/events",
-          "http://user@127.0.0.1:#{port}/symphony/events"
+          "http://user@127.0.0.1:#{port}/symphony/events",
+          "http://127.0.0.1:123@127.0.0.1:#{port}/symphony/events"
         ] do
       System.put_env("SYMPHONY_NOTIFY_URL", invalid)
       assert Config.notification_url() == nil
