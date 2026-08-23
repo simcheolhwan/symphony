@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server"
 import { WebClient } from "@slack/web-api"
 import { Hono } from "hono"
+
 import { loadConfig } from "./config.ts"
 import { eventRoutes } from "./events.ts"
 import { SlackThreads } from "./slack.ts"
@@ -15,5 +16,5 @@ app.route("/", eventRoutes(threads, config.path, config.slackUserId))
 
 // 127.0.0.1 전용 바인딩이 보안 경계이며 요청 인증은 두지 않는다.
 serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {
-  console.log(`notifier listening on http://127.0.0.1:${info.port}${config.path}`)
+  console.info(`notifier listening on http://127.0.0.1:${info.port}${config.path}`)
 })

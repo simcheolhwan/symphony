@@ -1,0 +1,15 @@
+{
+  "name": "symphony-launcher",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "symphonyctl": "src/symphonyctl.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "start": "node src/symphonyctl.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

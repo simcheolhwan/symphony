@@ -1,5 +1,6 @@
 import { Hono } from "hono"
 import { z } from "zod"
+
 import type { SlackThreads } from "./slack.ts"
 import { bodyText, replyBlocks, replyText } from "./templates.ts"
 
@@ -30,7 +31,13 @@ export function eventRoutes(threads: SlackThreads, path: string, mentionUserId: 
   const app = new Hono()
 
   app.post(path, async (c) => {
-    const body = await c.req.json().catch(() => undefined)
+    let body: unknown = null
+    try {
+      body = await c.req.json<unknown>()
+    } catch (error) {
+      // 잘못된 JSON은 아래 스키마 검증 실패와 같은 400 응답으로 처리한다.
+      body = error
+    }
     const parsed = lifecycleEventSchema.safeParse(body)
     if (!parsed.success) {
       return c.json({ error: z.treeifyError(parsed.error) }, 400)

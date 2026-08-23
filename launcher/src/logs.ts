@@ -1,27 +1,27 @@
 import { readdir, stat } from "node:fs/promises"
 import { join } from "node:path"
-import { LOGS_ROOT, NOTIFIER_PROCESS_NAME } from "./constants.mts"
-import { buildEnv, readSharedEnv } from "./env.mts"
-import { findExecutable, spawnForeground } from "./process.mts"
-import { instanceId, lookupInstance, readRegistry } from "./registry.mts"
-import type { WorkflowName } from "./registry.mts"
-import { buildArgs, requireWorkflowFile } from "./runners.mts"
+
+import { LOGS_ROOT, NOTIFIER_PROCESS_NAME } from "./constants.ts"
+import { buildEnv, readSharedEnv } from "./env.ts"
+import { findExecutable, spawnForeground } from "./process.ts"
+import { instanceId, lookupInstance, readRegistry } from "./registry.ts"
+import type { WorkflowName } from "./registry.ts"
+import { buildArgs, requireWorkflowFile } from "./runners.ts"
 
 const LOG_TAIL_LINES = "100"
 
-export const runLogs = async (alias: string, workflow: WorkflowName): Promise<number> => {
-  const directory = join(LOGS_ROOT, instanceId(alias, workflow), "log")
-  let entries: string[]
+const readLogEntries = async (directory: string): Promise<string[]> => {
   try {
-    entries = await readdir(directory)
+    return await readdir(directory)
   } catch (error) {
     throw new Error(`로그 디렉터리를 읽을 수 없습니다: ${directory}`, { cause: error })
   }
+}
 
+export const runLogs = async (alias: string, workflow: WorkflowName): Promise<number> => {
+  const directory = join(LOGS_ROOT, instanceId(alias, workflow), "log")
+  const entries = await readLogEntries(directory)
   const candidates = entries.filter((name) => /^symphony\.log\.\d+$/.test(name))
-  if (candidates.length === 0) {
-    throw new Error(`로그 파일이 없습니다: ${directory}`)
-  }
   // disk_log의 wrap 로그는 파일 여러 개를 순환하므로 마지막으로 기록된 파일을 따라간다.
   const files = await Promise.all(
     candidates.map(async (name) => {
@@ -29,7 +29,14 @@ export const runLogs = async (alias: string, workflow: WorkflowName): Promise<nu
       return { path, modifiedAt: (await stat(path)).mtimeMs }
     }),
   )
-  const latest = files.reduce((left, right) => (right.modifiedAt > left.modifiedAt ? right : left))
+  const [first, ...remaining] = files
+  if (first === undefined) {
+    throw new Error(`로그 파일이 없습니다: ${directory}`)
+  }
+  let latest = first
+  for (const file of remaining) {
+    if (file.modifiedAt > latest.modifiedAt) latest = file
+  }
   return spawnForeground("tail", ["-n", LOG_TAIL_LINES, "-f", latest.path], process.env)
 }
 
@@ -55,5 +62,9 @@ export const runForeground = async (alias: string, workflow: WorkflowName): Prom
 // 알림 서버는 disk_log 대신 표준 출력만 남기므로 pm2 로그를 따라간다.
 export const runNotifierLogs = async (): Promise<number> => {
   const pm2Path = await findExecutable("pm2")
-  return spawnForeground(pm2Path, ["logs", NOTIFIER_PROCESS_NAME, "--lines", LOG_TAIL_LINES], process.env)
+  return spawnForeground(
+    pm2Path,
+    ["logs", NOTIFIER_PROCESS_NAME, "--lines", LOG_TAIL_LINES],
+    process.env,
+  )
 }

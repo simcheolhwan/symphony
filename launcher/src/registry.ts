@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
-import { PROCESS_PREFIX, REGISTRY_PATH, ROOT } from "./constants.mts"
-import { isRecord } from "./guards.mts"
+
+import { PROCESS_PREFIX, REGISTRY_PATH, ROOT } from "./constants.ts"
+import { isRecord } from "./guards.ts"
 
 const DEFAULT_EFFORT = "xhigh"
 
@@ -93,6 +94,35 @@ const optionalString = (
 ): string | undefined =>
   record[field] === undefined ? undefined : requireString(record, field, context)
 
+interface TargetFields {
+  alias: string
+  repo: string
+  project: string | undefined
+}
+
+const parseInstance = (target: TargetFields, name: string, config: unknown): Instance => {
+  if (!isWorkflowName(name)) {
+    throw new Error(`${target.alias} target에 알 수 없는 워크플로가 있습니다: ${name}`)
+  }
+  const context = `${target.alias} target의 ${name} 워크플로`
+  if (!isRecord(config)) {
+    throw new Error(`${context} 설정이 객체가 아닙니다.`)
+  }
+  const fields: InstanceFields = {
+    alias: target.alias,
+    repo: target.repo,
+    model: optionalString(config, "model", context),
+    effort: optionalString(config, "model_reasoning_effort", context) ?? DEFAULT_EFFORT,
+  }
+  if (name !== "linear") {
+    return { ...fields, workflow: name }
+  }
+  if (target.project === undefined) {
+    throw new Error(`${target.alias} target은 linear 워크플로를 켰으므로 project가 필요합니다.`)
+  }
+  return { ...fields, workflow: name, project: target.project }
+}
+
 const parseTarget = (alias: string, value: unknown): Target => {
   requireAlias(alias)
   if (!isRecord(value)) {
@@ -100,47 +130,30 @@ const parseTarget = (alias: string, value: unknown): Target => {
   }
   const repo = requireString(value, "repo", `${alias} target`)
   const project = optionalString(value, "project", `${alias} target`)
-  const workflows = value["workflows"]
+  const { workflows } = value
   if (!isRecord(workflows)) {
     throw new Error(`${alias} target의 workflows가 객체가 아닙니다.`)
   }
 
+  const target = { alias, repo, project }
   const instances = new Map<WorkflowName, Instance>()
   for (const [name, config] of Object.entries(workflows)) {
-    if (!isWorkflowName(name)) {
-      throw new Error(`${alias} target에 알 수 없는 워크플로가 있습니다: ${name}`)
-    }
-    const context = `${alias} target의 ${name} 워크플로`
-    if (!isRecord(config)) {
-      throw new Error(`${context} 설정이 객체가 아닙니다.`)
-    }
-    const fields: InstanceFields = {
-      alias,
-      repo,
-      model: optionalString(config, "model", context),
-      effort: optionalString(config, "model_reasoning_effort", context) ?? DEFAULT_EFFORT,
-    }
-    if (name === "linear") {
-      if (project === undefined) {
-        throw new Error(`${alias} target은 linear 워크플로를 켰으므로 project가 필요합니다.`)
-      }
-      instances.set(name, { ...fields, workflow: name, project })
-    } else {
-      instances.set(name, { ...fields, workflow: name })
-    }
+    const instance = parseInstance(target, name, config)
+    instances.set(instance.workflow, instance)
   }
   return { alias, instances }
 }
 
-export const readRegistry = async (): Promise<Map<string, Target>> => {
-  let text: string
+const readRegistryFile = async (): Promise<string> => {
   try {
-    text = await readFile(REGISTRY_PATH, "utf8")
+    return await readFile(REGISTRY_PATH, "utf8")
   } catch (error) {
     throw new Error(`target 레지스트리를 읽지 못했습니다: ${REGISTRY_PATH}`, { cause: error })
   }
+}
 
-  let parsed: unknown
+const parseRegistryJson = (text: string): Record<string, unknown> => {
+  let parsed: unknown = undefined
   try {
     parsed = JSON.parse(text)
   } catch (error) {
@@ -149,7 +162,11 @@ export const readRegistry = async (): Promise<Map<string, Target>> => {
   if (!isRecord(parsed)) {
     throw new Error(`${REGISTRY_PATH}의 최상위 값이 객체가 아닙니다.`)
   }
+  return parsed
+}
 
+export const readRegistry = async (): Promise<Map<string, Target>> => {
+  const parsed = parseRegistryJson(await readRegistryFile())
   const registry = new Map<string, Target>()
   for (const [alias, value] of Object.entries(parsed)) {
     registry.set(alias, parseTarget(alias, value))
@@ -166,10 +183,7 @@ export const lookupTarget = (registry: Map<string, Target>, alias: string): Targ
 }
 
 // 별칭만 주면 그 별칭의 활성 워크플로 전체가 대상이다.
-export const selectInstances = (
-  target: Target,
-  workflow: WorkflowName | undefined,
-): Instance[] => {
+export const selectInstances = (target: Target, workflow: WorkflowName | undefined): Instance[] => {
   if (workflow === undefined) {
     const instances = Array.from(target.instances.values())
     if (instances.length === 0) {

@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
+
 import type { ChatPostMessageArguments, WebClient } from "@slack/web-api"
 
 export const THREADS_PATH = join(homedir(), ".config", "symphony", "notifier-threads.json")
@@ -13,6 +14,17 @@ export type MessageBlocks = Extract<ChatPostMessageArguments, { blocks: unknown 
 // 상한에서 밀려난 작업의 이벤트는 새 본문으로 시작한다. 항목 하나가 짧은 문자열
 // 두 개라 500개는 파일 크기와 메모리 모두 무시할 수 있는 수준이다.
 const MAX_THREADS = 500
+
+async function readThreadMapping(): Promise<string | null> {
+  try {
+    return await readFile(THREADS_PATH, "utf8")
+  } catch (error) {
+    if (!isMissingFile(error)) {
+      console.error(`thread mapping read failed: ${THREADS_PATH}`, error)
+    }
+    return null
+  }
+}
 
 /** 키별 스레드 매핑과 직렬 게시를 관리하는 WebClient 래퍼 */
 export class SlackThreads {
@@ -33,12 +45,8 @@ export class SlackThreads {
    * 채널이고, 매핑을 잃은 작업은 새 본문으로 다시 시작하면 된다.
    */
   async load(): Promise<void> {
-    const text = await readFile(THREADS_PATH, "utf8").catch((error: unknown) => {
-      if (isMissingFile(error)) return undefined
-      console.error(`thread mapping read failed: ${THREADS_PATH}`, error)
-      return undefined
-    })
-    if (text === undefined) return
+    const text = await readThreadMapping()
+    if (text === null) return
 
     for (const [key, ts] of parseThreads(text)) {
       this.threadTs.set(key, ts)
@@ -51,14 +59,10 @@ export class SlackThreads {
    * 실패는 로그만 남기고 버려 이후 이벤트 게시를 막지 않는다.
    */
   enqueue(key: string, task: () => Promise<void>): void {
-    const prev = this.chains.get(key) ?? Promise.resolve()
-    const next = prev.then(task).catch((error) => {
-      console.error(`slack post failed for ${key}:`, error)
-    })
+    const previous = this.chains.get(key) ?? Promise.resolve()
+    const next = this.runTask(previous, key, task)
     this.chains.set(key, next)
-    void next.finally(() => {
-      if (this.chains.get(key) === next) this.chains.delete(key)
-    })
+    void this.removeChainWhenDone(key, next)
   }
 
   getThread(key: string): string | undefined {
@@ -94,14 +98,35 @@ export class SlackThreads {
   // 직렬화해 부분적으로 덮어쓴 파일이 남지 않게 한다.
   private persist(): void {
     const text = serializeThreads(this.threadTs)
-    this.writes = this.writes
-      .then(async () => {
-        await mkdir(dirname(THREADS_PATH), { recursive: true })
-        await writeFile(THREADS_PATH, text, "utf8")
-      })
-      .catch((error) => {
-        console.error(`thread mapping persist failed: ${THREADS_PATH}`, error)
-      })
+    this.writes = this.writeAfter(this.writes, text)
+  }
+
+  private async runTask(
+    previous: Promise<void>,
+    key: string,
+    task: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await previous
+      await task()
+    } catch (error) {
+      console.error(`slack post failed for ${key}:`, error)
+    }
+  }
+
+  private async removeChainWhenDone(key: string, chain: Promise<void>): Promise<void> {
+    await chain
+    if (this.chains.get(key) === chain) this.chains.delete(key)
+  }
+
+  private async writeAfter(previous: Promise<void>, text: string): Promise<void> {
+    try {
+      await previous
+      await mkdir(dirname(THREADS_PATH), { recursive: true })
+      await writeFile(THREADS_PATH, text, "utf8")
+    } catch (error) {
+      console.error(`thread mapping persist failed: ${THREADS_PATH}`, error)
+    }
   }
 }
 
@@ -109,7 +134,7 @@ export class SlackThreads {
 export function parseThreads(text: string): Map<string, string> {
   const threads = new Map<string, string>()
 
-  let parsed: unknown
+  let parsed: unknown = null
   try {
     parsed = JSON.parse(text)
   } catch (error) {

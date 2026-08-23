@@ -75,7 +75,9 @@ export function replyText(payload: LifecycleEvent, mentionUserId: string): strin
 function statusLine(payload: LifecycleEvent, mentionUserId: string): string {
   const { event, reason, dispatch_reasons, observed, issue } = payload
   const { emoji, label } = eventLabels[event] ?? { emoji: "ℹ️", label: event }
-  const segments = [`<@${mentionUserId}> ${emoji} ${escapeMrkdwn(label)} (${escapeMrkdwn(issue.state)})`]
+  const segments = [
+    `<@${mentionUserId}> ${emoji} ${escapeMrkdwn(label)} (${escapeMrkdwn(issue.state)})`,
+  ]
 
   if (reason) segments.push(escapeMrkdwn(reason))
   if (dispatch_reasons !== undefined && dispatch_reasons.length > 0) {
@@ -84,7 +86,7 @@ function statusLine(payload: LifecycleEvent, mentionUserId: string): string {
     )
   }
   if (observed !== undefined && observed.length > 0) {
-    segments.push(`관측: ${observed.map(escapeMrkdwn).join(", ")}`)
+    segments.push(`관측: ${observed.map((value) => escapeMrkdwn(value)).join(", ")}`)
   }
 
   return segments.join(" — ")

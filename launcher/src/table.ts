@@ -25,7 +25,7 @@ export const printTable = (rows: string[][]): void => {
   )
   if (widths === undefined) return
   for (const row of rows) {
-    console.log(
+    console.info(
       row
         .map((value, column) => padToWidth(value, widths[column] ?? 0))
         .join("  ")

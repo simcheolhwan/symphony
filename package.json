@@ -1,0 +1,26 @@
+{
+  "name": "symphony",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "vp check {launcher,notifier}/src vite.config.ts",
+    "check:fix": "vp check --fix {launcher,notifier}/src vite.config.ts",
+    "format": "vp fmt {launcher,notifier}/src vite.config.ts",
+    "lint": "vp lint {launcher,notifier}/src vite.config.ts",
+    "test": "vp test"
+  },
+  "devDependencies": {
+    "@simcheolhwan/oxlint-config": "github:simcheolhwan/oxlint-config",
+    "@tsconfig/node-lts": "^24.0.1",
+    "@tsconfig/node-ts": "^23.6.4",
+    "@tsconfig/strictest": "^2.0.8",
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2",
+    "vite": "catalog:",
+    "vite-plus": "0.2.9"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.22.0"
+}

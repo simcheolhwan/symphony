@@ -1,16 +1,17 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
-import { ENV_PATH, WORKSPACE_ROOT } from "./constants.mts"
-import { isRecord } from "./guards.mts"
-import { instanceId, instanceName, workflowLabel } from "./registry.mts"
-import type { Instance } from "./registry.mts"
+
+import { ENV_PATH, WORKSPACE_ROOT } from "./constants.ts"
+import { isRecord } from "./guards.ts"
+import { instanceId, instanceName, workflowLabel } from "./registry.ts"
+import type { Instance } from "./registry.ts"
 
 // source 대신 KEY=VALUE만 해석한다. 값의 따옴표 한 겹은 벗기고 변수 확장과 이스케이프는 지원하지 않는다.
 const parseEnvFile = (text: string): Record<string, string> => {
   const result: Record<string, string> = {}
-  text.split("\n").forEach((rawLine, index) => {
+  for (const [index, rawLine] of text.split("\n").entries()) {
     const line = rawLine.trim()
-    if (line === "" || line.startsWith("#")) return
+    if (line === "" || line.startsWith("#")) continue
     const separator = line.indexOf("=")
     if (separator <= 0) {
       // 값에 비밀이 들어 있을 수 있으므로 줄 내용은 출력하지 않는다.
@@ -26,7 +27,7 @@ const parseEnvFile = (text: string): Record<string, string> => {
       ((value.startsWith('"') && value.endsWith('"')) ||
         (value.startsWith("'") && value.endsWith("'")))
     result[name] = quoted ? value.slice(1, -1) : value
-  })
+  }
   return result
 }
 
@@ -39,6 +40,15 @@ export const readSharedEnv = async (): Promise<Record<string, string>> => {
     }
     throw error
   }
+}
+
+// pm2 데몬이 오래된 PATH를 유지하고 있어도 mise를 찾도록 현재 PATH를 넘긴다.
+const withCurrentPath = (env: Record<string, string>): Record<string, string> => {
+  const path = process.env["PATH"]
+  if (path !== undefined) {
+    env["PATH"] = path
+  }
+  return env
 }
 
 export const buildEnv = (
@@ -68,12 +78,3 @@ export const buildEnv = (
 
 export const buildNotifierEnv = (sharedEnv: Record<string, string>): Record<string, string> =>
   withCurrentPath({ ...sharedEnv })
-
-// pm2 데몬이 오래된 PATH를 유지하고 있어도 mise를 찾도록 현재 PATH를 넘긴다.
-const withCurrentPath = (env: Record<string, string>): Record<string, string> => {
-  const path = process.env["PATH"]
-  if (path !== undefined) {
-    env["PATH"] = path
-  }
-  return env
-}
