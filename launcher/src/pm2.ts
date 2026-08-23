@@ -1,5 +1,6 @@
+import { z } from "zod"
+
 import { PROCESS_PREFIX } from "./constants.ts"
-import { isRecord } from "./guards.ts"
 import { runProcess } from "./process.ts"
 
 export interface Pm2Process {
@@ -19,12 +20,24 @@ export const formatUptime = (startedAt: number): string => {
   return `${Math.floor(hours / 24)}일`
 }
 
-const parseNumber = (value: unknown, field: string): number => {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new TypeError(`pm2 jlist의 ${field} 값이 올바르지 않습니다.`)
-  }
-  return value
-}
+const pm2ProcessSchema = z
+  .object({
+    name: z.string(),
+    pm2_env: z.object({
+      status: z.string(),
+      pm_uptime: z.number(),
+    }),
+    // 실행 중이 아닌 프로세스는 0이다.
+    pid: z.number(),
+  })
+  .transform(({ name, pid, pm2_env: environment }): Pm2Process => ({
+    name,
+    status: environment.status,
+    uptime: environment.pm_uptime,
+    pid,
+  }))
+
+const pm2ProcessesSchema = z.array(pm2ProcessSchema)
 
 const parsePm2Json = (text: string): unknown => {
   try {
@@ -34,26 +47,31 @@ const parsePm2Json = (text: string): unknown => {
   }
 }
 
-const parsePm2Processes = (text: string): Pm2Process[] => {
+export const parsePm2Processes = (text: string): Pm2Process[] => {
   const value = parsePm2Json(text)
-  if (!Array.isArray(value)) {
-    throw new TypeError("pm2 jlist 결과가 배열이 아닙니다.")
+  const result = pm2ProcessesSchema.safeParse(value)
+  if (result.success) return result.data
+
+  const path = result.error.issues[0]?.path ?? []
+  const [index, parent] = path
+  if (typeof index !== "number") {
+    throw new TypeError("pm2 jlist 결과가 배열이 아닙니다.", { cause: result.error })
   }
-  return value.map((entry, index) => {
-    if (!isRecord(entry) || typeof entry["name"] !== "string" || !isRecord(entry["pm2_env"])) {
-      throw new Error(`pm2 jlist의 ${index}번 프로세스가 올바르지 않습니다.`)
+
+  const field = path.at(-1)
+  if (field === "pm_uptime" || field === "pid") {
+    throw new TypeError(`pm2 jlist의 ${field} 값이 올바르지 않습니다.`, { cause: result.error })
+  }
+  if (parent === "pm2_env" && field === "status" && Array.isArray(value)) {
+    const name = z.object({ name: z.string() }).safeParse(value[index])
+    if (name.success) {
+      throw new TypeError(`pm2 jlist의 ${name.data.name} 프로세스가 올바르지 않습니다.`, {
+        cause: result.error,
+      })
     }
-    const environment = entry["pm2_env"]
-    if (typeof environment["status"] !== "string") {
-      throw new TypeError(`pm2 jlist의 ${entry["name"]} 프로세스가 올바르지 않습니다.`)
-    }
-    return {
-      name: entry["name"],
-      status: environment["status"],
-      uptime: parseNumber(environment["pm_uptime"], "pm_uptime"),
-      // 실행 중이 아닌 프로세스는 0이다.
-      pid: parseNumber(entry["pid"], "pid"),
-    }
+  }
+  throw new Error(`pm2 jlist의 ${index}번 프로세스가 올바르지 않습니다.`, {
+    cause: result.error,
   })
 }
 

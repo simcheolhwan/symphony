@@ -8,7 +8,7 @@ flowchart LR
     P -->|mise exec| S[symphony escript]
 ```
 
-진입점은 `src/symphonyctl.ts`다. Node 24의 네이티브 type stripping으로 TypeScript를 그대로 실행하므로 빌드가 없다. PM2와 `mise`는 `PATH`에서 해석하므로 전역 설치가 필요하다.
+진입점은 `src/symphonyctl.ts`다. Node 24의 네이티브 type stripping으로 TypeScript를 그대로 실행하므로 빌드가 없다. 외부 입력인 `targets.json`과 PM2 응답은 Zod로 파싱한다. 저장소를 처음 설치하거나 의존성이 바뀌면 저장소 루트에서 `pnpm install`을 실행해야 한다. PM2와 `mise`는 `PATH`에서 해석하므로 전역 설치가 필요하다.
 
 escript는 다음 인자로 기동한다.
 
@@ -41,7 +41,7 @@ symphonyctl notifier start|stop|restart|logs
 
 로컬 설정은 저장소 밖 `~/.config/symphony/`에 두고 커밋하지 않는다. 두 파일 모두 필수라 없으면 기동 명령이 실패한다 (알림을 쓰지 않아도 `env`는 빈 파일로 둔다). 레지스트리 스키마가 어긋나면 프로세스를 건드리기 전에 실패한다.
 
-- `targets.json`: target 레지스트리. 별칭을 키로 하는 객체이고, 별칭은 `^[a-z0-9-]+$` 형식만 허용한다.
+- `targets.json`: target 레지스트리. 별칭을 키로 하는 객체이고, 별칭은 `^[a-z0-9-]+$` 형식만 허용한다. 문자열 설정은 양끝 공백을 제거한 뒤 비어 있지 않아야 한다.
 - `env`: 인스턴스 공통 환경변수. `KEY=VALUE` 줄만 해석한다. `#` 주석 줄은 무시하고, 키의 `export ` 접두사와 값 양끝의 따옴표 한 겹은 제거하며, 변수 확장과 이스케이프는 지원하지 않는다. `PATH`를 적어도 런처가 자신의 `PATH`로 항상 덮어쓴다. 알림 관련 키는 [`notifier/README.md`](../notifier/README.md)의 설정 절을 따른다.
 
 ```json
@@ -87,6 +87,7 @@ symphonyctl notifier start|stop|restart|logs
 - 프로세스 이름은 `symphony-<별칭>-<워크플로>`, 알림 서버는 `symphony-notifier`다. 워크스페이스와 로그 경로도 같은 식별자에서 파생한다.
 - fork 모드, `min_uptime` 10초, `max_restarts` 5, SIGTERM 후 15초 강제 종료로 등록한다.
 - 프로세스 목록이 바뀔 때마다 `pm2 save --force`로 스냅샷을 갱신해 데몬 재기동 후 복원에 대비한다.
+- `pm2 jlist` 응답은 프로세스 이름, 상태, 시작 시각, PID를 스키마로 검증한다. 형식이 어긋나면 기존 JSON, 배열, 프로세스, 필드 문맥을 포함한 오류로 명령을 중단한다.
 
 ## 코드 구조
 
@@ -105,3 +106,5 @@ src/table.ts           # 표 렌더링
 src/constants.ts       # 경로와 프로세스 접두사
 src/guards.ts          # 타입 가드
 ```
+
+`targets.json`과 `pm2 jlist` 파싱은 같은 디렉터리의 테스트에서 정상 변환과 오류 문맥을 검증한다 (저장소 루트에서 `pnpm test`).

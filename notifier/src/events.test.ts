@@ -53,13 +53,33 @@ describe("lifecycleEventSchema", () => {
     expect(lifecycleEventSchema.safeParse({ ...valid, event: "paused" }).success).toBe(true)
   })
 
-  it("빈 event를 거부한다", () => {
+  it("공백뿐인 event를 거부한다", () => {
     expect(lifecycleEventSchema.safeParse({ ...valid, event: "" }).success).toBe(false)
+    expect(lifecycleEventSchema.safeParse({ ...valid, event: "  " }).success).toBe(false)
   })
 
-  it("issue.url이 URL이 아니면 거부한다", () => {
-    const payload = { ...valid, issue: { ...valid.issue, url: "not-a-url" } }
-    expect(lifecycleEventSchema.safeParse(payload).success).toBe(false)
+  it("제공된 선택 문자열과 목록 항목이 비어 있으면 거부한다", () => {
+    expect(lifecycleEventSchema.safeParse({ ...valid, reason: "" }).success).toBe(false)
+    expect(lifecycleEventSchema.safeParse({ ...valid, observed: ["  "] }).success).toBe(false)
+    expect(
+      lifecycleEventSchema.safeParse({
+        ...valid,
+        issue: { ...valid.issue, title: "" },
+      }).success,
+    ).toBe(false)
+  })
+
+  it("issue.url은 HTTP(S) URL만 허용한다", () => {
+    for (const url of ["not-a-url", "ftp://example.com/issue/42"]) {
+      const payload = { ...valid, issue: { ...valid.issue, url } }
+      expect(lifecycleEventSchema.safeParse(payload).success).toBe(false)
+    }
+    expect(
+      lifecycleEventSchema.safeParse({
+        ...valid,
+        issue: { ...valid.issue, url: "http://example.com/issue/42" },
+      }).success,
+    ).toBe(true)
   })
 
   it("issue.id가 없으면 거부한다", () => {

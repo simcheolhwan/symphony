@@ -163,13 +163,14 @@ defmodule SymphonyElixir.Config do
   # with the exact form `http://127.0.0.1:<port>` (it binds to loopback, and
   # `localhost` can resolve differently between the Erlang sender and the Node
   # receiver), so the sender accepts only URLs the receiver would accept
-  # instead of posting into the void. The prefix check rejects URLs that reach
-  # the same parse result through userinfo or an implicit default port.
+  # instead of posting into the void. The URI pattern rejects userinfo, and the
+  # prefix check rejects URLs that reach the same parse result without an
+  # explicit port.
   defp parse_http_url(value) do
     url = String.trim(value)
 
     case URI.new(url) do
-      {:ok, %URI{scheme: "http", host: "127.0.0.1", port: port}}
+      {:ok, %URI{scheme: "http", host: "127.0.0.1", port: port, userinfo: nil}}
       when is_integer(port) and port > 0 ->
         if String.starts_with?(url, "http://127.0.0.1:") do
           url

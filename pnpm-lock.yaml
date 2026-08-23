@@ -9,6 +9,9 @@ catalogs:
     vite:
       specifier: npm:@voidzero-dev/vite-plus-core@0.2.9
       version: 0.2.9
+    zod:
+      specifier: ^4.4.3
+      version: 4.4.3
 
 overrides:
   vite@*: npm:@voidzero-dev/vite-plus-core@0.2.9
@@ -42,7 +45,11 @@ importers:
         specifier: 0.2.9
         version: 0.2.9(@types/node@26.2.0)(@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.2.0)(typescript@7.0.2))(typescript@7.0.2)
 
-  launcher: {}
+  launcher:
+    dependencies:
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
 
   notifier:
     dependencies:
@@ -56,7 +63,7 @@ importers:
         specifier: ^4.13.2
         version: 4.13.3
       zod:
-        specifier: ^4.4.3
+        specifier: 'catalog:'
         version: 4.4.3
 
 packages:

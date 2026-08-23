@@ -10,7 +10,7 @@
     "@hono/node-server": "^2.1.1",
     "@slack/web-api": "^8.0.0",
     "hono": "^4.13.2",
-    "zod": "^4.4.3"
+    "zod": "catalog:"
   },
   "engines": {
     "node": ">=24"
