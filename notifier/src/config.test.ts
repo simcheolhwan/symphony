@@ -57,9 +57,15 @@ describe("loadConfig", () => {
     ).toThrow("사용자 정보가 없어야 합니다.")
   })
 
-  it("형식이 아닌 채널 ID를 거부한다", () => {
+  it("DM 대화 ID를 허용한다", () => {
+    expect(loadConfig({ ...valid, SYMPHONY_SLACK_CHANNEL: "D0123456789" }).slackChannel).toBe(
+      "D0123456789",
+    )
+  })
+
+  it("잘못된 형식의 Slack 대화 ID를 거부한다", () => {
     expect(() => loadConfig({ ...valid, SYMPHONY_SLACK_CHANNEL: "notifications" })).toThrow(
-      "Slack 채널 ID 형식이어야 합니다.",
+      "Slack 대화 ID 형식이어야 합니다.",
     )
   })
 

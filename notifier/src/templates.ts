@@ -71,7 +71,7 @@ export function replyText(payload: LifecycleEvent, mentionUserId: string): strin
 }
 
 // 스레드를 팔로우하지 않으면 답글 알림이 오지 않으므로 멘션으로 알림을 보장한다.
-// 본문은 채널 메시지라 이미 알림 대상이어서 멘션하지 않는다.
+// 본문은 대상 대화의 새 메시지라 이미 알림 대상이어서 멘션하지 않는다.
 function statusLine(payload: LifecycleEvent, mentionUserId: string): string {
   const { event, reason, dispatch_reasons, observed, issue } = payload
   const { emoji, label } = eventLabels[event] ?? { emoji: "ℹ️", label: event }

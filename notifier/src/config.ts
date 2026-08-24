@@ -29,7 +29,7 @@ const notifyUrlSchema = z
 const envSchema = z.object({
   SYMPHONY_NOTIFY_URL: notifyUrlSchema,
   SYMPHONY_SLACK_BOT_TOKEN: z.string().min(1),
-  SYMPHONY_SLACK_CHANNEL: z.string().regex(/^[CG][A-Z0-9]+$/, "Slack 채널 ID 형식이어야 합니다."),
+  SYMPHONY_SLACK_CHANNEL: z.string().regex(/^[CDG][A-Z0-9]+$/, "Slack 대화 ID 형식이어야 합니다."),
   // 잘못된 ID는 Slack이 오류 없이 평문으로 출력해 조용히 실패하므로 형식을 여기서 잡는다.
   // U는 일반 사용자, W는 Enterprise Grid 사용자 ID다.
   SYMPHONY_SLACK_USER_ID: z.string().regex(/^[UW][A-Z0-9]+$/, "Slack 사용자 ID 형식이어야 합니다."),

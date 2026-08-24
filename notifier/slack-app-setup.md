@@ -1,8 +1,8 @@
 # Slack 앱 설정
 
-알림 서버용 Slack 앱을 만들어 `SYMPHONY_SLACK_BOT_TOKEN`(Bot 토큰, `xoxb-...`)과 `SYMPHONY_SLACK_CHANNEL`(채널 ID)을 확보한다. `SYMPHONY_SLACK_USER_ID`(멘션 대상, `U...` 또는 Enterprise Grid의 `W...`)는 앱과 무관하게 Slack 프로필의 **Copy member ID**로 얻는다 — `users.list`로도 조회할 수 있으나 `users:read` 스코프가 추가로 필요하다. 설정 주입과 실행은 [README](README.md)의 설정, 운영 절을 따른다.
+알림 서버용 Slack 앱을 만들어 `SYMPHONY_SLACK_BOT_TOKEN`(Bot 토큰, `xoxb-...`)과 `SYMPHONY_SLACK_CHANNEL`(채널 또는 DM 대화 ID)을 확보한다. `SYMPHONY_SLACK_USER_ID`(멘션 대상, `U...` 또는 Enterprise Grid의 `W...`)는 앱과 무관하게 Slack 프로필의 **Copy member ID**로 얻는다. `users.list`로도 조회할 수 있으나 `users:read` 스코프가 추가로 필요하다. 설정 주입과 실행은 [README](README.md)의 설정, 운영 절을 따른다.
 
-에이전트가 Slack Web API로 진행한다. 앱 생성은 `apps.manifest.create`, 토큰 교환은 `oauth.v2.access`, 채널 처리는 `conversations.list`와 `conversations.join`이다.
+에이전트가 Slack Web API로 진행한다. 앱 생성은 `apps.manifest.create`, 토큰 교환은 `oauth.v2.access`, 공개 채널 처리는 `conversations.list`와 `conversations.join`이다.
 
 ## 사람이 해야 하는 두 가지
 
@@ -24,7 +24,7 @@ Slack 보안 모델상 우회할 수 없어 사람이 웹 UI에서 처리한다.
 }
 ```
 
-- 런타임에 필요한 스코프는 `chat:write`뿐이다. 사용자 멘션은 ID를 텍스트에 넣는 것이므로 추가 스코프가 없다. `channels:read`(채널 ID 조회)와 `channels:join`(봇 채널 참여)은 설치 단계를 API로 처리하기 위해 넣는다.
+- 런타임에 필요한 스코프는 `chat:write`뿐이다. 사용자 멘션은 ID를 텍스트에 넣는 것이므로 추가 스코프가 없다. `channels:read`(채널 ID 조회)와 `channels:join`(봇 채널 참여)은 공개 채널 설치 단계를 API로 처리하기 위해 넣는다.
 - 표시명은 Slack 앱 설정에만 있는 값이라 코드와 무관하다. 이미 발급받아 쓰고 있는 앱이 있으면 표시명을 바꾸지 않는다 — 기존 스레드의 발신자 표기만 바뀌고 얻는 것이 없다.
 - `redirect_urls`는 HTTPS만 허용된다. `https://localhost`는 어디에도 코드를 전송하지 않기 위한 값이며 수신 서버가 필요 없다.
 
@@ -33,11 +33,12 @@ Slack 보안 모델상 우회할 수 없어 사람이 웹 UI에서 처리한다.
 - `apps.manifest.create` 응답의 `credentials.client_id`와 `client_secret`은 `oauth.v2.access` 토큰 교환에 필요하므로 응답을 버리지 말고 보관한다. 잃어버리면 웹 UI의 **Basic Information**에서 다시 확인한다.
 - `apps.manifest.create`가 `internal_error`를 반환하면 같은 manifest를 `apps.manifest.validate`로 검증해 `errors` 배열에서 원인을 확인한다. 검증을 통과하는데도 실패하면 https://api.slack.com/apps 에서 같은 이름의 앱이 이미 있는지 확인한다. 이름 충돌이 `internal_error`로 나타난다. 재시도는 rate limit(Tier 1, 분당 1회 수준)을 고려해 1분 이상 간격을 둔다.
 - 비공개 채널은 `conversations.join`이 불가하므로 사람이 그 채널에서 `/invite @<봇 표시명>`으로 초대한다. 봇이 채널에 없는 상태로 게시하면 `not_in_channel` 오류가 난다. 비공개 채널 ID는 `channels:read`의 `conversations.list`로 조회되지 않으므로(`groups:read` 필요) Slack UI의 채널 세부정보 하단에서 복사한다.
+- DM은 앱의 봇이 참여하는 대화여야 한다. 두 사용자 사이의 DM에는 봇이 게시할 수 없다. 앱과의 DM을 연 뒤 Slack URL의 `/archives/D...` 부분에서 `D`로 시작하는 대화 ID를 복사한다.
 - 설치 후 스코프를 추가하면 앱을 재설치해야 하고, 재설치 시 토큰이 재발급될 수 있다.
 
 ## 검증
 
-`~/.config/symphony/env`에 README 설정 표의 네 값을 기입하고, `notifier/`에서 `pnpm install`을 마친 뒤 `symphonyctl notifier start`로 실행한다. `SYMPHONY_NOTIFY_URL`로 `started` 이벤트를 보내 채널에 본문 메시지가 게시되는지 확인한다 (페이로드 형식은 README의 이벤트 인터페이스). 실패하면 `symphonyctl notifier logs`에서 Slack 오류(`invalid_auth`, `not_in_channel` 등)를 확인한다.
+`~/.config/symphony/env`에 README 설정 표의 네 값을 기입하고, `notifier/`에서 `pnpm install`을 마친 뒤 `symphonyctl notifier start`로 실행한다. `SYMPHONY_NOTIFY_URL`로 `started` 이벤트를 보내 대상 대화에 본문 메시지가 게시되는지 확인한다 (페이로드 형식은 README의 이벤트 인터페이스). 실패하면 `symphonyctl notifier logs`에서 Slack 오류(`invalid_auth`, `not_in_channel` 등)를 확인한다.
 
 ## 배경: 도구 선택
 
