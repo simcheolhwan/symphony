@@ -6,6 +6,7 @@
     "check": "vp check {launcher,notifier}/src vite.config.ts",
     "check:fix": "vp check --fix {launcher,notifier}/src vite.config.ts",
     "format": "vp fmt {launcher,notifier}/src vite.config.ts",
+    "install:symphonyctl": "launcher/install.sh",
     "lint": "vp lint {launcher,notifier}/src vite.config.ts",
     "test": "vp test"
   },
