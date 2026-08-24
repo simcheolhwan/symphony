@@ -19,10 +19,14 @@ escript는 다음 인자로 기동한다.
 ## 명령
 
 ```sh
-symphonyctl start <별칭>... [--workflow <워크플로>] | --all
+symphonyctl start <별칭>... [--workflow <워크플로>]
+symphonyctl start --all [--workflow <워크플로>]
+symphonyctl start --all --with-notifier
 symphonyctl restart [<별칭>...] [--workflow <워크플로>]
+symphonyctl restart --with-notifier
 symphonyctl stop [<별칭>...] [--workflow <워크플로>]
-symphonyctl ls
+symphonyctl stop --with-notifier
+symphonyctl ls [--json]
 symphonyctl logs <별칭> --workflow <워크플로>
 symphonyctl run <별칭> --workflow <워크플로>
 symphonyctl notifier start|stop|restart|logs
@@ -33,9 +37,79 @@ symphonyctl notifier start|stop|restart|logs
 - `start`는 online 상태인 인스턴스만 건너뛴다. errored 등 다른 상태로 등록돼 있으면 `pm2 delete` 후 새로 등록한다.
 - `stop`은 `pm2 stop`이 아니라 `pm2 delete`로 등록을 해제한다. 등록된 프로세스는 모두 실행 중이어야 한다는 전제를 유지하기 위해서다.
 - `ls`는 PM2 프로세스 목록 기준이다. 레지스트리에 있어도 실행 중이 아닌 인스턴스는 나오지 않고, 알림 서버는 별칭 칸에 `알림`으로 함께 표시된다.
+- `ls --json`은 레지스트리의 모든 활성 인스턴스와 PM2 프로세스를 결합한 JSON 객체 하나만 stdout에 출력한다. 진행 메시지, ANSI 코드, 사람용 표는 출력하지 않는다.
+- `--with-notifier`는 기기 전체 조작인 `start --all`, 인자 없는 `restart`, 인자 없는 `stop`에서만 쓸 수 있다. 일부 별칭이나 워크플로에 notifier를 결합하면 명령을 실행하기 전에 실패한다.
+- `start --all --with-notifier`는 설정과 의존성을 모두 검증하고 알림 서버를 시작한 뒤 [상태 확인 응답](../notifier/README.md#상태-확인)을 최대 10초 동안 기다린다. 응답을 확인한 뒤에만 활성 인스턴스를 시작한다. `stop --with-notifier`는 PM2에 등록된 모든 Symphony 인스턴스, 알림 서버 순으로 중지한다. `restart --with-notifier`는 알림 서버와 기존 인자 없는 `restart` 대상 전체를 재시작한다.
+- 기기 전체 조작 명령은 목표 상태에 이미 도달한 대상을 건너뛴다. 일부 PM2 조작이 실패하면 상태를 추측해 롤백하지 않고, 성공한 변경을 `pm2 save --force`로 보존한 뒤 작업 단계와 대상을 포함한 오류를 반환한다.
 - `logs`는 escript가 남기는 disk_log 순환 파일 중 최근 파일을 마지막 100줄부터 `tail -f`로 따라간다.
 - `run`은 PM2를 거치지 않고 같은 명령을 전면에서 실행한다. 디버깅용이다. 현재 셸 환경은 상속하지 않고 시스템 필수 변수(`HOME` 등)와 주입 환경변수만 전달해 PM2 실행과 같은 조건을 유지한다.
 - `notifier`는 알림 서버([`notifier/`](../notifier/README.md)) 전용 하위 명령이다. 인스턴스가 아니므로 별칭과 워크플로가 없다.
+
+### 기계용 상태 규격
+
+`ls --json`의 `schemaVersion`은 현재 `1`이다. 배열은 별칭과 워크플로, 프로세스 이름 기준으로 정렬한다. 출력에는 `targets.json`의 실행 설정, `~/.config/symphony/env`의 값, PM2 환경변수 등 인증 정보가 포함되지 않는다.
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "partial",
+  "instances": [
+    {
+      "alias": "myrepo",
+      "workflow": "linear",
+      "status": "online",
+      "registered": true,
+      "pid": 43120,
+      "startedAt": "2026-08-23T12:34:56.000Z"
+    },
+    {
+      "alias": "myrepo",
+      "workflow": "pr-author",
+      "status": "stopped",
+      "registered": false,
+      "pid": null,
+      "startedAt": null
+    }
+  ],
+  "orphanedProcesses": [
+    {
+      "processName": "symphony-oldrepo-pr-reviewer",
+      "alias": "oldrepo",
+      "workflow": "pr-reviewer",
+      "status": "stopped",
+      "registered": true,
+      "pid": null,
+      "startedAt": null
+    }
+  ],
+  "notifier": {
+    "status": "online",
+    "registered": true,
+    "pid": 43100,
+    "startedAt": "2026-08-23T12:34:50.000Z"
+  }
+}
+```
+
+| 필드 | 규격 |
+| --- | --- |
+| `status` | 기기 전체 집계 상태. `online`, `stopped`, `partial`, `transitioning`, `errored` 중 하나다 |
+| `instances` | `targets.json`에서 활성화한 모든 대상과 워크플로 조합이다. PM2에 없으면 `status: "stopped"`, `registered: false`로 남는다 |
+| `orphanedProcesses` | `symphony-` 접두사로 PM2에 등록됐지만 현재 활성 인스턴스나 notifier가 아닌 프로세스다. 이름을 인스턴스 ID로 해석할 수 없으면 `alias`와 `workflow`가 `null`이다 |
+| `notifier` | 기기당 하나인 notifier 상태다. PM2에 없으면 `status: "stopped"`, `registered: false`다 |
+| `registered` | 해당 리소스가 PM2에 등록됐는지 나타낸다. 등록된 PM2 프로세스 자체가 `stopped`인 경우에도 `true`다 |
+| `pid` | 실행 중인 프로세스의 PID다. PM2가 PID를 `0`으로 보고하거나 프로세스가 등록되지 않았으면 `null`이다 |
+| `startedAt` | PM2의 시작 시각을 UTC ISO 8601 문자열로 변환한 값이다. PM2가 시작 시각을 `0`으로 보고하거나 프로세스가 등록되지 않았으면 `null`이다 |
+
+리소스의 `status`는 PM2 상태를 그대로 보존하는 안정적인 영어 식별자다. 허용값은 `online`, `launching`, `stopping`, `stopped`, `errored`, `waiting restart`, `one-launch-status`다. 알 수 없는 상태는 임의로 변환하지 않고 PM2 입력 스키마 오류로 처리한다.
+
+기기 전체 `status`는 활성 인스턴스, notifier, orphan 프로세스를 모두 포함해 다음 우선순위로 계산한다.
+
+1. 하나라도 `errored`면 `errored`다.
+2. 그 외에 하나라도 `launching`, `stopping`, `waiting restart`, `one-launch-status`면 `transitioning`이다.
+3. 모두 `stopped`면 `stopped`다.
+4. 모두 `online`이면 `online`이다.
+5. 나머지 조합은 `partial`이다.
 
 ## 설정
 
@@ -92,19 +166,23 @@ symphonyctl notifier start|stop|restart|logs
 ## 코드 구조
 
 ```
-package.json           # 독립 workspace package와 실행 스크립트
+package.json           # 워크스페이스 패키지, 실행 스크립트, 알림 서버 설정 인터페이스 의존성
 tsconfig.json          # 런처 TypeScript 설정
 src/symphonyctl.ts     # 직접 실행 가능한 CLI 진입점, 명령 파싱과 분기
+src/command.ts         # CLI 인자 파싱과 옵션 조합 검증
 src/registry.ts        # targets.json 파싱, 인스턴스 식별자와 프로세스 이름
 src/env.ts             # 공통 env 파일 파싱, 인스턴스 환경변수 조립
-src/runners.ts         # start/restart/stop과 알림 서버 기동
+src/runners.ts         # 인스턴스 선택과 start/restart/stop 실행 순서
+src/notifier.ts        # 알림 서버 설정 검증, 기동, 상태 확인
+src/pm2-actions.ts     # PM2 변경, 설정 파일 기동, 상태 저장
 src/pm2.ts             # pm2 jlist 파싱
 src/process.ts         # 실행 파일 탐색, 하위 프로세스 실행
 src/logs.ts            # logs, run, notifier logs
 src/list.ts            # ls 테이블
+src/status.ts          # 기계용 상태 도메인, 집계, JSON 출력 스키마
 src/table.ts           # 표 렌더링
 src/constants.ts       # 경로와 프로세스 접두사
 src/guards.ts          # 타입 가드
 ```
 
-`targets.json`과 `pm2 jlist` 파싱은 같은 디렉터리의 테스트에서 정상 변환과 오류 문맥을 검증한다 (저장소 루트에서 `pnpm test`).
+`targets.json`과 `pm2 jlist`는 각각의 Zod 스키마에서 검증한 뒤 도메인 타입으로 변환하고, 기계용 상태는 도메인 타입과 별도인 Zod 출력 스키마로 검증한다. 같은 디렉터리의 테스트에서 입력 파싱, 상태 집계, 출력 스키마, 알림 서버 준비 대기, 기기 전체 조작 순서와 실패 처리를 검증한다 (저장소 루트에서 `pnpm test`).

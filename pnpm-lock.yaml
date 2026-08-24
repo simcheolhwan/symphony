@@ -47,6 +47,9 @@ importers:
 
   launcher:
     dependencies:
+      symphony-notifier:
+        specifier: workspace:*
+        version: link:../notifier
       zod:
         specifier: 'catalog:'
         version: 4.4.3

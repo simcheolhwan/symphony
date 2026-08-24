@@ -10,6 +10,7 @@
     "start": "node src/symphonyctl.ts"
   },
   "dependencies": {
+    "symphony-notifier": "workspace:*",
     "zod": "catalog:"
   },
   "engines": {
