@@ -1,120 +1,10 @@
 #!/usr/bin/env node
 
+import { USAGE, parseCommand, parseNotifierAction } from "./command.ts"
 import { runList } from "./list.ts"
 import { runForeground, runLogs, runNotifierLogs } from "./logs.ts"
-import { WORKFLOW_NAMES, isWorkflowName, requireAlias } from "./registry.ts"
 import type { WorkflowName } from "./registry.ts"
 import { runNotifier, runStartOrRestart, runStop } from "./runners.ts"
-
-const COMMANDS = ["start", "stop", "restart", "ls", "logs", "run", "notifier"] as const
-type Command = (typeof COMMANDS)[number]
-
-const NOTIFIER_ACTIONS = ["start", "stop", "restart", "logs"] as const
-type NotifierAction = (typeof NOTIFIER_ACTIONS)[number]
-
-interface ParsedCommand {
-  command: Command
-  aliases: string[]
-  workflow: WorkflowName | undefined
-  all: boolean
-}
-
-const USAGE = `사용법:
-  symphonyctl start <별칭>... [--workflow <워크플로>] | --all
-  symphonyctl restart [<별칭>...] [--workflow <워크플로>]
-  symphonyctl stop [<별칭>...] [--workflow <워크플로>]
-  symphonyctl ls
-  symphonyctl logs <별칭> --workflow <워크플로>
-  symphonyctl run <별칭> --workflow <워크플로>
-  symphonyctl notifier ${NOTIFIER_ACTIONS.join("|")}
-
-워크플로: ${WORKFLOW_NAMES.join(", ")}
---workflow를 생략하면 별칭의 활성 워크플로 전체가 대상이 된다 (logs, run 제외).`
-
-const isCommand = (value: string | undefined): value is Command =>
-  COMMANDS.some((command) => command === value)
-
-const isNotifierAction = (value: string | undefined): value is NotifierAction =>
-  NOTIFIER_ACTIONS.some((name) => name === value)
-
-// 이 명령의 위치 인자만 별칭이 아니라 동작이다. 알림 서버는 인스턴스가 아니다.
-const parseNotifierAction = (aliases: string[]): NotifierAction => {
-  const [action] = aliases
-  if (aliases.length !== 1 || !isNotifierAction(action)) {
-    throw new Error(`notifier 명령어에는 ${NOTIFIER_ACTIONS.join(", ")} 중 하나가 필요합니다.`)
-  }
-  return action
-}
-
-const parseWorkflowOption = (value: string | undefined): WorkflowName => {
-  if (value === undefined || !isWorkflowName(value)) {
-    throw new Error(`--workflow에는 ${WORKFLOW_NAMES.join(", ")} 중 하나가 필요합니다.`)
-  }
-  return value
-}
-
-const parseCommandArguments = (args: string[]): Omit<ParsedCommand, "command"> => {
-  const aliases: string[] = []
-  let workflow: WorkflowName | undefined = undefined
-  let all = false
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]
-    if (arg === "--all") {
-      all = true
-      continue
-    }
-    if (arg === "--workflow") {
-      workflow = parseWorkflowOption(args[index + 1])
-      index += 1
-      continue
-    }
-    if (arg === undefined || arg.startsWith("-")) {
-      throw new Error(`알 수 없는 옵션입니다: ${arg}`)
-    }
-    aliases.push(requireAlias(arg))
-  }
-  return { aliases, workflow, all }
-}
-
-const validateCommand = ({ command, aliases, workflow, all }: ParsedCommand): void => {
-  if (command === "ls" && (aliases.length > 0 || workflow !== undefined || all)) {
-    throw new Error("ls 명령어는 추가 인자를 받지 않습니다.")
-  }
-  if (command === "notifier" && (workflow !== undefined || all)) {
-    throw new Error("notifier 명령어는 --workflow와 --all을 받지 않습니다.")
-  }
-  if (
-    (command === "logs" || command === "run") &&
-    (aliases.length !== 1 || workflow === undefined || all)
-  ) {
-    throw new Error(`${command} 명령어에는 별칭 하나와 --workflow가 필요합니다.`)
-  }
-  if (command === "start" && aliases.length === 0 && !all) {
-    throw new Error("start 명령어에는 별칭 또는 --all이 필요합니다.")
-  }
-  if ((command === "stop" || command === "restart") && all) {
-    throw new Error(
-      `${command} 명령어는 --all을 받지 않습니다. 별칭을 생략하면 실행 중인 인스턴스 전체가 대상입니다.`,
-    )
-  }
-  if (all && aliases.length > 0) {
-    throw new Error("--all과 별칭은 함께 지정할 수 없습니다.")
-  }
-}
-
-const parseCommand = (argv: string[]): ParsedCommand | undefined => {
-  if (argv.length === 0 || (argv.length === 1 && argv[0] === "help")) {
-    return undefined
-  }
-
-  const [command] = argv
-  if (!isCommand(command)) {
-    throw new Error(`알 수 없는 명령어입니다: ${command}`)
-  }
-  const parsed = { command, ...parseCommandArguments(argv.slice(1)) }
-  validateCommand(parsed)
-  return parsed
-}
 
 const singleAlias = (aliases: string[]): string => {
   const [alias] = aliases
@@ -145,13 +35,16 @@ const main = async (): Promise<number> => {
   switch (parsed.command) {
     case "start":
     case "restart":
-      await runStartOrRestart(parsed.command, parsed.aliases, parsed.workflow, parsed.all)
+      await runStartOrRestart(parsed.command, parsed.aliases, parsed.workflow, {
+        all: parsed.all,
+        withNotifier: parsed.withNotifier,
+      })
       return 0
     case "stop":
-      await runStop(parsed.aliases, parsed.workflow)
+      await runStop(parsed.aliases, parsed.workflow, parsed.withNotifier)
       return 0
     case "ls":
-      await runList()
+      await runList(parsed.json)
       return 0
     case "logs":
       return runLogs(singleAlias(parsed.aliases), singleWorkflow(parsed.workflow))

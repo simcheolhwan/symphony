@@ -1,5 +1,8 @@
 import { z } from "zod"
 
+export const NOTIFIER_HEALTH_PATH = "/healthz"
+export const NOTIFIER_HEALTH_RESPONSE = "symphony-notifier-ready"
+
 // 발신 측(오케스트레이터)이 쓰는 URL 하나에서 수신 포트와 경로를 도출한다.
 // 포트를 따로 두면 양쪽이 어긋나도 발신 측 연결 실패 로그로만 드러난다.
 // 서버는 127.0.0.1에 바인딩하므로 호스트도 그 표기 하나만 허용한다. localhost는

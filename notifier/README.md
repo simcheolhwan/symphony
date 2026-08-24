@@ -18,7 +18,7 @@ flowchart LR
 
 ```sh
 pnpm install                  # 저장소 루트에서 최초 설치와 의존성 변경 후 실행한다
-symphonyctl notifier start    # 기동 (이미 실행 중이면 그대로 둔다)
+symphonyctl notifier start    # 기동 (이미 실행 중이면 준비 상태만 확인한다)
 symphonyctl notifier restart  # 재시작
 symphonyctl notifier stop     # 중지 (pm2 등록 해제)
 symphonyctl notifier logs     # 표준 출력 추적
@@ -38,6 +38,12 @@ symphonyctl notifier logs     # 표준 출력 추적
 수신 포트를 별도 환경변수로 두면 발신 URL의 포트와 어긋나도 발신 측의 연결 실패 로그로만 드러난다. URL 하나에서 도출해 그 가능성을 없앤다. `http` 스킴, 호스트 `127.0.0.1`, 0보다 큰 명시적 포트, 사용자 정보가 없는 URL만 허용한다. 명시한 기본 포트 `:80`도 허용한다. 서버가 `127.0.0.1`에 바인딩하므로 호스트도 그 표기 하나만 허용하며, `localhost`는 발신과 수신의 IPv4/IPv6 리졸브가 갈릴 수 있어 배제한다. 양끝 공백을 제거한 뒤 발신 측(오케스트레이터)과 같은 규칙으로 검증해, 어긋난 값이면 수신 측은 부팅을 거부하고 발신 측은 이벤트마다 경고를 남긴 뒤 발신을 건너뛴다.
 
 Slack 앱 생성과 토큰 발급은 [slack-app-setup.md](slack-app-setup.md)를 따른다.
+
+## 상태 확인
+
+`GET /healthz`는 설정 검증과 스레드 매핑 복원을 마치고 HTTP 요청을 받을 수 있을 때 `200 OK`와 `symphony-notifier-ready`를 반환한다. 다른 상태나 본문은 준비되지 않은 것으로 취급한다. `symphonyctl`은 알림 서버를 시작하거나 재시작할 때 이 응답을 최대 10초 동안 기다린다. 단독 명령은 응답을 확인해야 성공을 보고하고, `--with-notifier` 명령은 응답을 확인한 뒤에만 Symphony 인스턴스를 시작한다.
+
+상태 확인 요청도 `127.0.0.1` 전용이며 인증하지 않는다. 이 응답은 시작 시점의 수신 준비만 나타내며 Slack API 연결과 이후 프로세스 실행 상태는 보장하지 않는다.
 
 ## 이벤트 인터페이스
 
@@ -249,7 +255,7 @@ PR 저자 워크플로가 CI 실패에서 시작해 피드백 대응, 리뷰 재
 ```
 src/
   main.ts        # 시작: 설정 검증, Hono 앱 구성, 127.0.0.1 listen
-  config.ts      # 환경변수 파싱·검증
+  config.ts      # 환경변수 파싱·검증, 상태 확인 인터페이스
   slack.ts       # WebClient 래퍼, 키별 직렬 게시, 스레드 매핑과 영속화
   events.ts      # 라이프사이클 이벤트 라우트: 페이로드 스키마, 게시 흐름
   templates.ts   # 본문 텍스트와 답글 블록 템플릿 (순수 함수)

@@ -15,7 +15,7 @@ describe("parsePm2Processes", () => {
       {
         name: "symphony-myrepo-linear",
         status: "online",
-        uptime: 1_700_000_000_000,
+        startedAt: 1_700_000_000_000,
         pid: 1234,
       },
     ])
@@ -37,6 +37,11 @@ describe("parsePm2Processes", () => {
   it("status가 잘못되면 프로세스 이름을 보고한다", () => {
     expect(() =>
       parsePm2Processes(JSON.stringify([{ ...valid[0], pm2_env: { pm_uptime: 1 } }])),
+    ).toThrow("pm2 jlist의 symphony-myrepo-linear 프로세스가 올바르지 않습니다.")
+    expect(() =>
+      parsePm2Processes(
+        JSON.stringify([{ ...valid[0], pm2_env: { status: "unknown", pm_uptime: 1 } }]),
+      ),
     ).toThrow("pm2 jlist의 symphony-myrepo-linear 프로세스가 올바르지 않습니다.")
   })
 

@@ -3,10 +3,21 @@ import { z } from "zod"
 import { PROCESS_PREFIX } from "./constants.ts"
 import { runProcess } from "./process.ts"
 
+export const PM2_STATUSES = [
+  "online",
+  "launching",
+  "stopping",
+  "stopped",
+  "errored",
+  "waiting restart",
+  "one-launch-status",
+] as const
+export type Pm2Status = (typeof PM2_STATUSES)[number]
+
 export interface Pm2Process {
   name: string
-  status: string
-  uptime: number
+  status: Pm2Status
+  startedAt: number
   pid: number
 }
 
@@ -24,16 +35,16 @@ const pm2ProcessSchema = z
   .object({
     name: z.string(),
     pm2_env: z.object({
-      status: z.string(),
-      pm_uptime: z.number(),
+      status: z.enum(PM2_STATUSES),
+      pm_uptime: z.number().min(0).max(253_402_300_799_999),
     }),
     // 실행 중이 아닌 프로세스는 0이다.
-    pid: z.number(),
+    pid: z.number().int().nonnegative(),
   })
   .transform(({ name, pid, pm2_env: environment }): Pm2Process => ({
     name,
     status: environment.status,
-    uptime: environment.pm_uptime,
+    startedAt: environment.pm_uptime,
     pid,
   }))
 

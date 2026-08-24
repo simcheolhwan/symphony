@@ -2,7 +2,7 @@ import { serve } from "@hono/node-server"
 import { WebClient } from "@slack/web-api"
 import { Hono } from "hono"
 
-import { loadConfig } from "./config.ts"
+import { NOTIFIER_HEALTH_PATH, NOTIFIER_HEALTH_RESPONSE, loadConfig } from "./config.ts"
 import { eventRoutes } from "./events.ts"
 import { SlackThreads } from "./slack.ts"
 
@@ -12,6 +12,7 @@ const threads = new SlackThreads(new WebClient(config.slackBotToken), config.sla
 await threads.load()
 
 const app = new Hono()
+app.get(NOTIFIER_HEALTH_PATH, (context) => context.text(NOTIFIER_HEALTH_RESPONSE))
 app.route("/", eventRoutes(threads, config.path, config.slackUserId))
 
 // 127.0.0.1 전용 바인딩이 보안 경계이며 요청 인증은 두지 않는다.
