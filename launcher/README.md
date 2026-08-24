@@ -10,6 +10,8 @@ flowchart LR
 
 진입점은 `src/symphonyctl.ts`다. Node 24의 네이티브 type stripping으로 TypeScript를 그대로 실행하므로 빌드가 없다. 외부 입력인 `targets.json`과 PM2 응답은 Zod로 파싱한다. 저장소를 처음 설치하거나 의존성이 바뀌면 저장소 루트에서 `pnpm install`을 실행해야 한다. PM2와 `mise`는 `PATH`에서 해석하므로 전역 설치가 필요하다.
 
+저장소 루트에서 `pnpm install:symphonyctl`을 실행하면 `~/.local/bin/symphonyctl`이 진입점을 가리키는 절대 심볼릭 링크로 설치된다. 일반 셸과 `symphonyctl`을 호출하는 데몬의 `PATH`에 `~/.local/bin`이 있어야 한다. 저장소를 옮겼으면 명령을 다시 실행한다.
+
 escript는 다음 인자로 기동한다.
 
 - `--logs-root ~/.local/state/symphony/<별칭>-<워크플로>`: 인스턴스별 로그 루트. escript는 그 아래 `log/symphony.log.<N>` 순환 파일에 기록한다.
@@ -168,6 +170,7 @@ symphonyctl notifier start|stop|restart|logs
 ```
 package.json           # 워크스페이스 패키지, 실행 스크립트, 알림 서버 설정 인터페이스 의존성
 tsconfig.json          # 런처 TypeScript 설정
+install.sh             # ~/.local/bin/symphonyctl 심볼릭 링크 설치
 src/symphonyctl.ts     # 직접 실행 가능한 CLI 진입점, 명령 파싱과 분기
 src/command.ts         # CLI 인자 파싱과 옵션 조합 검증
 src/registry.ts        # targets.json 파싱, 인스턴스 식별자와 프로세스 이름
