@@ -21,16 +21,6 @@ export interface Pm2Process {
   pid: number
 }
 
-export const formatUptime = (startedAt: number): string => {
-  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1_000))
-  if (seconds < 60) return `${seconds}초`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}분`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}시간`
-  return `${Math.floor(hours / 24)}일`
-}
-
 const pm2ProcessSchema = z
   .object({
     name: z.string(),

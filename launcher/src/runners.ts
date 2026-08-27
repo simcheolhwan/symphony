@@ -5,14 +5,14 @@ import { join } from "node:path"
 import { LOGS_ROOT, NOTIFIER_PROCESS_NAME, PROCESS_PREFIX, ROOT } from "./constants.ts"
 import { buildEnv, readSharedEnv } from "./env.ts"
 import { prepareNotifier, startOrRestartNotifier, stopNotifier } from "./notifier.ts"
-import { mutatePm2, startPm2App, withSavedPm2Changes } from "./pm2-actions.ts"
+import { OperationError } from "./output.ts"
+import type { OperationResult, OperationTarget } from "./output.ts"
+import { mutatePm2, startPm2App } from "./pm2-actions.ts"
 import type { Pm2MutationContext } from "./pm2-actions.ts"
-import { formatUptime, readSymphonyProcesses } from "./pm2.ts"
+import { readSymphonyProcesses } from "./pm2.ts"
 import type { Pm2Process } from "./pm2.ts"
 import { findExecutable } from "./process.ts"
 import {
-  formatProcessName,
-  formatRef,
   instanceId,
   lookupInstance,
   lookupTarget,
@@ -46,22 +46,19 @@ export const requireWorkflowFile = async (instance: Instance): Promise<void> => 
   }
 }
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error)
-
-const matchesProcess = (
-  name: string,
+const matchesRef = (
+  ref: InstanceRef,
   alias: string | undefined,
   workflow: WorkflowName | undefined,
-): boolean => {
-  const ref = parseInstanceId(name.slice(PROCESS_PREFIX.length))
-  // 인스턴스 ID로 해석되지 않는 프로세스(알림 서버)는 인스턴스 명령의 대상이 아니다.
-  if (ref === undefined) return false
-  return (
-    (alias === undefined || ref.alias === alias) &&
-    (workflow === undefined || ref.workflow === workflow)
-  )
-}
+): boolean =>
+  (alias === undefined || ref.alias === alias) &&
+  (workflow === undefined || ref.workflow === workflow)
+
+const operationTarget = (ref: InstanceRef): OperationTarget => ({
+  type: "instance",
+  alias: ref.alias,
+  workflow: ref.workflow,
+})
 
 const runningRefs = (
   processes: Map<string, Pm2Process>,
@@ -107,18 +104,24 @@ interface StartContext {
   mutation: Pm2MutationContext
 }
 
-const startInstance = async (instance: Instance, context: StartContext): Promise<void> => {
+const startInstance = async (
+  instance: Instance,
+  context: StartContext,
+): Promise<OperationResult> => {
   const name = processName(instance.alias, instance.workflow)
-  const label = formatRef(instance)
+  const target = operationTarget(instance)
   const existing = context.processes.get(name)
   if (context.command === "start" && existing?.status === "online") {
-    console.info(`${label}: 실행 중 (${formatUptime(existing.startedAt)})`)
-    return
+    return { target, outcome: "unchanged" }
+  }
+  if (existing !== undefined) {
+    try {
+      await mutatePm2(context.mutation, ["delete", name])
+    } catch (error) {
+      throw new OperationError("delete", target, error)
+    }
   }
   try {
-    if (existing !== undefined) {
-      await mutatePm2(context.mutation, ["delete", name])
-    }
     await startPm2App(context.mutation, {
       name,
       script: context.misePath,
@@ -127,20 +130,50 @@ const startInstance = async (instance: Instance, context: StartContext): Promise
       env: buildEnv(instance, context.sharedEnv),
     })
   } catch (error) {
-    const action = context.command === "start" ? "시작" : "재시작"
-    throw new Error(`${label}: ${action} 실패: ${errorMessage(error)}`, { cause: error })
+    throw new OperationError("start", target, error)
   }
-  console.info(`${label}: 시작됨`)
+  return {
+    target,
+    outcome: context.command === "restart" && existing !== undefined ? "restarted" : "started",
+  }
 }
 
-const startInstances = async (instances: Instance[], context: StartContext): Promise<void> => {
-  const startNext = async (index: number): Promise<void> => {
+const startInstances = (
+  instances: Instance[],
+  context: StartContext,
+): Promise<OperationResult[]> => {
+  const startNext = async (
+    index: number,
+    results: OperationResult[],
+  ): Promise<OperationResult[]> => {
     const instance = instances[index]
-    if (instance === undefined) return
-    await startInstance(instance, context)
-    await startNext(index + 1)
+    if (instance === undefined) return results
+    const result = await startInstance(instance, context)
+    return startNext(index + 1, [...results, result])
   }
-  await startNext(0)
+  return startNext(0, [])
+}
+
+const validateInstances = async (instances: Instance[]): Promise<void> => {
+  await Promise.all(
+    instances.map(async (instance) => {
+      try {
+        await requireWorkflowFile(instance)
+      } catch (error) {
+        throw new OperationError("validate", operationTarget(instance), error)
+      }
+    }),
+  )
+}
+
+const prepareOperationNotifier = async (
+  sharedEnv: Record<string, string>,
+): ReturnType<typeof prepareNotifier> => {
+  try {
+    return await prepareNotifier(sharedEnv)
+  } catch (error) {
+    throw new OperationError("validate", { type: "notifier" }, error)
+  }
 }
 
 interface StartOptions {
@@ -153,7 +186,7 @@ export const runStartOrRestart = async (
   aliases: string[],
   workflow: WorkflowName | undefined,
   options: StartOptions,
-): Promise<void> => {
+): Promise<OperationResult[]> => {
   const { all, withNotifier } = options
   const registry = await readRegistry()
   const pm2Path = await findExecutable("pm2")
@@ -162,47 +195,47 @@ export const runStartOrRestart = async (
 
   const instances = resolveStartTargets(registry, processes, { aliases, workflow, all })
   if (instances.length === 0 && !withNotifier) {
-    console.info("대상 인스턴스가 없습니다.")
-    return
+    return []
   }
 
   const sharedEnv = await readSharedEnv()
-  await Promise.all(instances.map((instance) => requireWorkflowFile(instance)))
-  const notifier = withNotifier ? await prepareNotifier(sharedEnv) : undefined
+  await validateInstances(instances)
+  const notifier = withNotifier ? await prepareOperationNotifier(sharedEnv) : undefined
 
-  await withSavedPm2Changes(pm2Path, async (mutation) => {
-    if (notifier !== undefined) {
-      await startOrRestartNotifier(
-        command === "start" ? "start" : "restart",
-        processes.get(NOTIFIER_PROCESS_NAME),
-        notifier,
-        mutation,
-      )
-    }
-    if (instances.length === 0) {
-      console.info("대상 인스턴스가 없습니다.")
-      return
-    }
-    await startInstances(instances, { command, misePath, processes, sharedEnv, mutation })
-  })
+  const mutation = { pm2Path }
+  const notifierResults =
+    notifier === undefined
+      ? []
+      : [
+          await startOrRestartNotifier(
+            command === "start" ? "start" : "restart",
+            processes.get(NOTIFIER_PROCESS_NAME),
+            notifier,
+            mutation,
+          ),
+        ]
+  return [
+    ...notifierResults,
+    ...(await startInstances(instances, { command, misePath, processes, sharedEnv, mutation })),
+  ]
 }
 
 const stopProcesses = async (
   context: Pm2MutationContext,
-  names: string[],
+  refs: InstanceRef[],
   index: number,
-): Promise<void> => {
-  const name = names[index]
-  if (name === undefined) return
+  results: OperationResult[],
+): Promise<OperationResult[]> => {
+  const ref = refs[index]
+  if (ref === undefined) return results
+  const name = processName(ref.alias, ref.workflow)
+  const target = operationTarget(ref)
   try {
     await mutatePm2(context, ["delete", name])
   } catch (error) {
-    throw new Error(`${formatProcessName(name)}: 중지 실패: ${errorMessage(error)}`, {
-      cause: error,
-    })
+    throw new OperationError("delete", target, error)
   }
-  console.info(`${formatProcessName(name)}: 중지됨`)
-  await stopProcesses(context, names, index + 1)
+  return stopProcesses(context, refs, index + 1, [...results, { target, outcome: "stopped" }])
 }
 
 // 등록된 프로세스는 모두 실행 중이어야 하므로 중지는 pm2 stop이 아니라 delete로 등록을 해제한다.
@@ -210,47 +243,46 @@ export const runStop = async (
   aliases: string[],
   workflow: WorkflowName | undefined,
   withNotifier = false,
-): Promise<void> => {
+): Promise<OperationResult[]> => {
   const pm2Path = await findExecutable("pm2")
   const processes = await readSymphonyProcesses(pm2Path)
   // 중지 대상은 레지스트리가 아니라 실행 중인 프로세스에서 해석한다.
-  const names = Array.from(processes.keys())
+  const refs = Array.from(processes.keys())
     .toSorted()
-    .filter((name) =>
-      aliases.length > 0
-        ? aliases.some((alias) => matchesProcess(name, alias, workflow))
-        : matchesProcess(name, undefined, workflow),
-    )
+    .flatMap((name) => {
+      const ref = parseInstanceId(name.slice(PROCESS_PREFIX.length))
+      if (ref === undefined) return []
+      const matches =
+        aliases.length > 0
+          ? aliases.some((alias) => matchesRef(ref, alias, workflow))
+          : matchesRef(ref, undefined, workflow)
+      return matches ? [ref] : []
+    })
   const notifier = processes.get(NOTIFIER_PROCESS_NAME)
-  if (names.length === 0 && (!withNotifier || notifier === undefined)) {
-    console.info("대상 프로세스가 없습니다.")
-    return
+  if (refs.length === 0 && !withNotifier) {
+    return []
   }
 
-  await withSavedPm2Changes(pm2Path, async (mutation) => {
-    await stopProcesses(mutation, names, 0)
-    if (withNotifier) await stopNotifier(notifier, mutation)
-  })
+  const mutation = { pm2Path }
+  const results = await stopProcesses(mutation, refs, 0, [])
+  if (withNotifier) results.push(await stopNotifier(notifier, mutation))
+  return results
 }
 
 // 알림 서버는 인스턴스가 아니라 머신당 하나뿐인 프로세스라 별칭도 워크플로도 없다.
-export const runNotifier = async (action: "start" | "stop" | "restart"): Promise<void> => {
+export const runNotifier = async (
+  action: "start" | "stop" | "restart",
+): Promise<OperationResult[]> => {
   const pm2Path = await findExecutable("pm2")
   const existing = (await readSymphonyProcesses(pm2Path)).get(NOTIFIER_PROCESS_NAME)
+  const mutation = { pm2Path }
 
   if (action === "stop") {
-    if (existing === undefined) {
-      console.info("대상 프로세스가 없습니다.")
-      return
-    }
-    await withSavedPm2Changes(pm2Path, (mutation) => stopNotifier(existing, mutation))
-    return
+    return [await stopNotifier(existing, mutation)]
   }
 
   // 기존 프로세스를 지운 뒤 시작에 실패해 아무것도 실행되지 않는 상태를 피하려고 먼저 확인한다.
   const sharedEnv = await readSharedEnv()
-  const notifier = await prepareNotifier(sharedEnv)
-  await withSavedPm2Changes(pm2Path, (mutation) =>
-    startOrRestartNotifier(action, existing, notifier, mutation),
-  )
+  const notifier = await prepareOperationNotifier(sharedEnv)
+  return [await startOrRestartNotifier(action, existing, notifier, mutation)]
 }

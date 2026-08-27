@@ -21,7 +21,7 @@ pnpm install                  # 저장소 루트에서 최초 설치와 의존�
 symphonyctl notifier start    # 기동 (이미 실행 중이면 준비 상태만 확인한다)
 symphonyctl notifier restart  # 재시작
 symphonyctl notifier stop     # 중지 (pm2 등록 해제)
-symphonyctl notifier logs     # 표준 출력 추적
+pm2 logs symphony-notifier    # 표준 출력 추적
 ```
 
 ## 설정

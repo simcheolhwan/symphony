@@ -1,5 +1,5 @@
 import { NOTIFIER_PROCESS_NAME } from "./constants.ts"
-import { buildListRows, printMachineStatus } from "./list.ts"
+import { printMachineStatus } from "./list.ts"
 import type { Pm2Process, Pm2Status } from "./pm2.ts"
 import { parseRegistry } from "./registry.ts"
 import { buildMachineStatus, machineStatusJsonSchema, toMachineStatusJson } from "./status.ts"
@@ -133,24 +133,7 @@ describe("buildMachineStatus", () => {
 })
 
 describe("ls 출력", () => {
-  it("기존 사람용 표 행을 유지한다", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_060_000)
-    expect(
-      buildListRows(
-        processes(
-          pm2Process("symphony-alpha-linear", "online"),
-          pm2Process(NOTIFIER_PROCESS_NAME, "errored"),
-        ),
-      ),
-    ).toEqual([
-      ["별칭", "워크플로", "상태", "실행 시간"],
-      ["alpha", "linear", "실행 중", "1분"],
-      ["알림", "-", "오류", "-"],
-    ])
-    now.mockRestore()
-  })
-
-  it("기계용 출력 스키마를 검증하고 JSON 객체 하나만 stdout에 쓴다", () => {
+  it("출력 스키마를 검증하고 JSON 객체 하나만 stdout에 쓴다", () => {
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true)
     printMachineStatus(registry, processes())
     expect(write).toHaveBeenCalledTimes(1)

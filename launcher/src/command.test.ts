@@ -1,13 +1,12 @@
-import { parseCommand } from "./command.ts"
+import { parseCommand, parseNotifierAction } from "./command.ts"
 
 describe("parseCommand", () => {
-  it("기계용 조회 옵션을 파싱한다", () => {
-    expect(parseCommand(["ls", "--json"])).toEqual({
+  it("ls를 추가 옵션 없이 파싱한다", () => {
+    expect(parseCommand(["ls"])).toEqual({
       command: "ls",
       aliases: [],
       workflow: undefined,
       all: false,
-      json: true,
       withNotifier: false,
     })
   })
@@ -33,9 +32,13 @@ describe("parseCommand", () => {
     )
   })
 
-  it("--json을 ls 외의 명령에서 거부한다", () => {
-    expect(() => parseCommand(["start", "--all", "--json"])).toThrow(
-      "--json은 ls 명령어에서만 사용할 수 있습니다.",
+  it("제거된 --json 옵션을 거부한다", () => {
+    expect(() => parseCommand(["ls", "--json"])).toThrow("알 수 없는 옵션입니다: --json")
+  })
+
+  it("제거된 notifier logs 동작을 거부한다", () => {
+    expect(() => parseNotifierAction(["logs"])).toThrow(
+      "notifier 명령어에는 start, stop, restart 중 하나가 필요합니다.",
     )
   })
 })

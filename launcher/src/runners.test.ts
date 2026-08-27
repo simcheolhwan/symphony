@@ -33,7 +33,7 @@ vi.mock("./env.ts", async (importOriginal) => ({
   readSharedEnv: mocks.readSharedEnv,
 }))
 
-const { runStartOrRestart, runStop } = await import("./runners.ts")
+const { runNotifier, runStartOrRestart, runStop } = await import("./runners.ts")
 
 const instance: Instance = {
   alias: "alpha",
@@ -72,7 +72,7 @@ const pm2Json = (): string =>
     })),
   )
 
-const captureError = async (operation: Promise<void>): Promise<unknown> => {
+const captureError = async (operation: Promise<unknown>): Promise<unknown> => {
   try {
     await operation
     return undefined
@@ -109,13 +109,8 @@ beforeEach(() => {
       addOnlineProcess(name)
       return ""
     }
-    if (action === "save") {
-      mocks.events.push("save")
-      return ""
-    }
     throw new Error(`예상하지 못한 PM2 명령: ${args.join(" ")}`)
   })
-  vi.spyOn(console, "info").mockImplementation(() => {})
 })
 
 afterEach(() => {
@@ -126,16 +121,32 @@ afterEach(() => {
 
 describe("--with-notifier lifecycle", () => {
   it("알림 서버 준비를 확인한 뒤 모든 인스턴스를 시작하며 반복 호출은 변경하지 않는다", async () => {
-    await runStartOrRestart("start", [], undefined, { all: true, withNotifier: true })
+    await expect(
+      runStartOrRestart("start", [], undefined, { all: true, withNotifier: true }),
+    ).resolves.toEqual([
+      { target: { type: "notifier" }, outcome: "started" },
+      {
+        target: { type: "instance", alias: "alpha", workflow: "pr-author" },
+        outcome: "started",
+      },
+    ])
     expect(mocks.events).toEqual([
       `start:${NOTIFIER_PROCESS_NAME}`,
       "start:symphony-alpha-pr-author",
-      "save",
     ])
 
     mocks.events.length = 0
-    await runStartOrRestart("start", [], undefined, { all: true, withNotifier: true })
+    await expect(
+      runStartOrRestart("start", [], undefined, { all: true, withNotifier: true }),
+    ).resolves.toEqual([
+      { target: { type: "notifier" }, outcome: "unchanged" },
+      {
+        target: { type: "instance", alias: "alpha", workflow: "pr-author" },
+        outcome: "unchanged",
+      },
+    ])
     expect(mocks.events).toEqual([])
+    expect(mocks.runProcess.mock.calls.every((call) => call[2] === "capture")).toBe(true)
   })
 
   it("알림 서버가 준비될 때까지 인스턴스를 시작하지 않는다", async () => {
@@ -155,7 +166,6 @@ describe("--with-notifier lifecycle", () => {
     expect(mocks.events).toEqual([
       `start:${NOTIFIER_PROCESS_NAME}`,
       "start:symphony-alpha-pr-author",
-      "save",
     ])
   })
 
@@ -177,10 +187,12 @@ describe("--with-notifier lifecycle", () => {
     firstHealth.resolve(new Response("not-ready"))
     await vi.advanceTimersByTimeAsync(10_100)
     await expect(error).resolves.toMatchObject({
-      message: "알림: 시작 실패: 알림 서버가 10초 안에 준비되지 않았습니다.",
+      message: "알림 서버가 10초 안에 준비되지 않았습니다.",
+      stage: "health-check",
+      target: { type: "notifier" },
     })
 
-    expect(mocks.events).toEqual([`start:${NOTIFIER_PROCESS_NAME}`, "save"])
+    expect(mocks.events).toEqual([`start:${NOTIFIER_PROCESS_NAME}`])
   })
 
   it("알림 서버 설정이 잘못됐으면 PM2 프로세스를 변경하지 않는다", async () => {
@@ -199,41 +211,68 @@ describe("--with-notifier lifecycle", () => {
   it("모든 인스턴스를 먼저 중지하고 notifier를 중지하며 반복 호출은 변경하지 않는다", async () => {
     addOnlineProcess("symphony-alpha-pr-author")
     addOnlineProcess(NOTIFIER_PROCESS_NAME)
-    await runStop([], undefined, true)
+    await expect(runStop([], undefined, true)).resolves.toEqual([
+      {
+        target: { type: "instance", alias: "alpha", workflow: "pr-author" },
+        outcome: "stopped",
+      },
+      { target: { type: "notifier" }, outcome: "stopped" },
+    ])
     expect(mocks.events).toEqual([
       "delete:symphony-alpha-pr-author",
       `delete:${NOTIFIER_PROCESS_NAME}`,
-      "save",
     ])
 
     mocks.events.length = 0
-    await runStop([], undefined, true)
+    await expect(runStop([], undefined, true)).resolves.toEqual([
+      { target: { type: "notifier" }, outcome: "unchanged" },
+    ])
     expect(mocks.events).toEqual([])
   })
 
   it("notifier와 기존 전체 restart 대상을 함께 재시작한다", async () => {
     addOnlineProcess("symphony-alpha-pr-author")
     addOnlineProcess(NOTIFIER_PROCESS_NAME)
-    await runStartOrRestart("restart", [], undefined, { all: false, withNotifier: true })
+    await expect(
+      runStartOrRestart("restart", [], undefined, { all: false, withNotifier: true }),
+    ).resolves.toEqual([
+      { target: { type: "notifier" }, outcome: "restarted" },
+      {
+        target: { type: "instance", alias: "alpha", workflow: "pr-author" },
+        outcome: "restarted",
+      },
+    ])
     expect(mocks.events).toEqual([
       `delete:${NOTIFIER_PROCESS_NAME}`,
       `start:${NOTIFIER_PROCESS_NAME}`,
       "delete:symphony-alpha-pr-author",
       "start:symphony-alpha-pr-author",
-      "save",
     ])
   })
 
-  it("일부 시작이 실패하면 성공한 상태를 저장하고 실패 대상을 보고한다", async () => {
+  it("일부 시작이 실패하면 실패 단계와 대상만 보고한다", async () => {
     mocks.failOnStart = "symphony-alpha-pr-author"
-    await expect(
+    const error = captureError(
       runStartOrRestart("start", [], undefined, { all: true, withNotifier: true }),
-    ).rejects.toThrow("alpha (pr-author): 시작 실패: PM2 start failed")
+    )
+    await expect(error).resolves.toMatchObject({
+      message: "PM2 start failed",
+      stage: "start",
+      target: { type: "instance", alias: "alpha", workflow: "pr-author" },
+    })
     expect(mocks.events).toEqual([
       `start:${NOTIFIER_PROCESS_NAME}`,
       "start:symphony-alpha-pr-author",
-      "save",
     ])
     expect(mocks.processes.has(NOTIFIER_PROCESS_NAME)).toBe(true)
+  })
+})
+
+describe("notifier lifecycle", () => {
+  it("등록되지 않은 notifier 중지를 unchanged로 보고한다", async () => {
+    await expect(runNotifier("stop")).resolves.toEqual([
+      { target: { type: "notifier" }, outcome: "unchanged" },
+    ])
+    expect(mocks.events).toEqual([])
   })
 })
