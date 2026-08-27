@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises"
 import { join } from "node:path"
 
-import { LOGS_ROOT, NOTIFIER_PROCESS_NAME } from "./constants.ts"
+import { LOGS_ROOT } from "./constants.ts"
 import { buildEnv, readSharedEnv } from "./env.ts"
 import { findExecutable, spawnForeground } from "./process.ts"
 import { instanceId, lookupInstance, readRegistry } from "./registry.ts"
@@ -57,14 +57,4 @@ export const runForeground = async (alias: string, workflow: WorkflowName): Prom
   const misePath = await findExecutable("mise")
   const env = { ...systemEnv(), ...buildEnv(instance, await readSharedEnv()) }
   return spawnForeground(misePath, buildArgs(instance), env)
-}
-
-// 알림 서버는 disk_log 대신 표준 출력만 남기므로 pm2 로그를 따라간다.
-export const runNotifierLogs = async (): Promise<number> => {
-  const pm2Path = await findExecutable("pm2")
-  return spawnForeground(
-    pm2Path,
-    ["logs", NOTIFIER_PROCESS_NAME, "--lines", LOG_TAIL_LINES],
-    process.env,
-  )
 }

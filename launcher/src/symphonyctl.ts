@@ -2,7 +2,8 @@
 
 import { USAGE, parseCommand, parseNotifierAction } from "./command.ts"
 import { runList } from "./list.ts"
-import { runForeground, runLogs, runNotifierLogs } from "./logs.ts"
+import { runForeground, runLogs } from "./logs.ts"
+import { serializeErrorResponse, serializeOperationResponse } from "./output.ts"
 import type { WorkflowName } from "./registry.ts"
 import { runNotifier, runStartOrRestart, runStop } from "./runners.ts"
 
@@ -35,16 +36,26 @@ const main = async (): Promise<number> => {
   switch (parsed.command) {
     case "start":
     case "restart":
-      await runStartOrRestart(parsed.command, parsed.aliases, parsed.workflow, {
-        all: parsed.all,
-        withNotifier: parsed.withNotifier,
-      })
+      process.stdout.write(
+        `${serializeOperationResponse(
+          parsed.command,
+          await runStartOrRestart(parsed.command, parsed.aliases, parsed.workflow, {
+            all: parsed.all,
+            withNotifier: parsed.withNotifier,
+          }),
+        )}\n`,
+      )
       return 0
     case "stop":
-      await runStop(parsed.aliases, parsed.workflow, parsed.withNotifier)
+      process.stdout.write(
+        `${serializeOperationResponse(
+          "stop",
+          await runStop(parsed.aliases, parsed.workflow, parsed.withNotifier),
+        )}\n`,
+      )
       return 0
     case "ls":
-      await runList(parsed.json)
+      await runList()
       return 0
     case "logs":
       return runLogs(singleAlias(parsed.aliases), singleWorkflow(parsed.workflow))
@@ -52,8 +63,7 @@ const main = async (): Promise<number> => {
       return runForeground(singleAlias(parsed.aliases), singleWorkflow(parsed.workflow))
     case "notifier": {
       const action = parseNotifierAction(parsed.aliases)
-      if (action === "logs") return runNotifierLogs()
-      await runNotifier(action)
+      process.stdout.write(`${serializeOperationResponse(action, await runNotifier(action))}\n`)
       return 0
     }
     default:
@@ -64,7 +74,6 @@ const main = async (): Promise<number> => {
 try {
   process.exitCode = await main()
 } catch (error) {
-  const message = error instanceof Error ? error.message : String(error)
-  console.error(`symphonyctl: ${message}`)
+  process.stderr.write(`${serializeErrorResponse(error)}\n`)
   process.exitCode = 1
 }

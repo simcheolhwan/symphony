@@ -4,7 +4,7 @@ import type { WorkflowName } from "./registry.ts"
 const COMMANDS = ["start", "stop", "restart", "ls", "logs", "run", "notifier"] as const
 export type Command = (typeof COMMANDS)[number]
 
-export const NOTIFIER_ACTIONS = ["start", "stop", "restart", "logs"] as const
+export const NOTIFIER_ACTIONS = ["start", "stop", "restart"] as const
 export type NotifierAction = (typeof NOTIFIER_ACTIONS)[number]
 
 export interface ParsedCommand {
@@ -12,7 +12,6 @@ export interface ParsedCommand {
   aliases: string[]
   workflow: WorkflowName | undefined
   all: boolean
-  json: boolean
   withNotifier: boolean
 }
 
@@ -20,7 +19,7 @@ export const USAGE = `사용법:
   symphonyctl start <별칭>... [--workflow <워크플로>] | --all [--workflow <워크플로>] | --all --with-notifier
   symphonyctl restart [<별칭>...] [--workflow <워크플로>] | --with-notifier
   symphonyctl stop [<별칭>...] [--workflow <워크플로>] | --with-notifier
-  symphonyctl ls [--json]
+  symphonyctl ls
   symphonyctl logs <별칭> --workflow <워크플로>
   symphonyctl run <별칭> --workflow <워크플로>
   symphonyctl notifier ${NOTIFIER_ACTIONS.join("|")}
@@ -61,13 +60,11 @@ const parseCommandArguments = (
     aliases: [],
     workflow: undefined,
     all: false,
-    json: false,
     withNotifier: false,
   }
   const arg = args[index]
   if (arg === undefined) return current
   if (arg === "--all") return parseCommandArguments(args, index + 1, { ...current, all: true })
-  if (arg === "--json") return parseCommandArguments(args, index + 1, { ...current, json: true })
   if (arg === "--with-notifier") {
     return parseCommandArguments(args, index + 1, { ...current, withNotifier: true })
   }
@@ -100,20 +97,17 @@ const validateWithNotifier = ({ command, aliases, workflow, all }: ParsedCommand
 }
 
 const validateCommand = (parsed: ParsedCommand): void => {
-  const { command, aliases, workflow, all, json, withNotifier } = parsed
-  if (json && command !== "ls") {
-    throw new Error("--json은 ls 명령어에서만 사용할 수 있습니다.")
-  }
+  const { command, aliases, workflow, all, withNotifier } = parsed
   if (withNotifier) validateWithNotifier(parsed)
   if (command === "ls" && (aliases.length > 0 || workflow !== undefined || all || withNotifier)) {
-    throw new Error("ls 명령어는 --json 외의 추가 인자를 받지 않습니다.")
+    throw new Error("ls 명령어는 추가 인자를 받지 않습니다.")
   }
-  if (command === "notifier" && (workflow !== undefined || all || json || withNotifier)) {
+  if (command === "notifier" && (workflow !== undefined || all || withNotifier)) {
     throw new Error("notifier 명령어는 추가 옵션을 받지 않습니다.")
   }
   if (
     (command === "logs" || command === "run") &&
-    (aliases.length !== 1 || workflow === undefined || all || json || withNotifier)
+    (aliases.length !== 1 || workflow === undefined || all || withNotifier)
   ) {
     throw new Error(`${command} 명령어에는 별칭 하나와 --workflow가 필요합니다.`)
   }

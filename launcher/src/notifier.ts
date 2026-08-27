@@ -5,9 +5,10 @@ import { setTimeout as delay } from "node:timers/promises"
 
 import { NOTIFIER_PROCESS_NAME, NOTIFIER_ROOT } from "./constants.ts"
 import { buildNotifierEnv } from "./env.ts"
+import { OperationError } from "./output.ts"
+import type { OperationResult, OperationTarget } from "./output.ts"
 import { mutatePm2, startPm2App } from "./pm2-actions.ts"
 import type { Pm2MutationContext } from "./pm2-actions.ts"
-import { formatUptime } from "./pm2.ts"
 import type { Pm2Process } from "./pm2.ts"
 
 const HEALTH_TIMEOUT_MS = 10_000
@@ -22,6 +23,8 @@ export interface PreparedNotifier {
   healthResponse: string
   healthUrl: string
 }
+
+const NOTIFIER_TARGET: OperationTarget = { type: "notifier" }
 
 const loadNotifierConfigModule = async (): Promise<typeof import("symphony-notifier/config")> => {
   try {
@@ -82,16 +85,23 @@ export const startOrRestartNotifier = async (
   existing: Pm2Process | undefined,
   prepared: PreparedNotifier,
   mutation: Pm2MutationContext,
-): Promise<void> => {
-  try {
-    if (action === "start" && existing?.status === "online") {
+): Promise<OperationResult> => {
+  if (action === "start" && existing?.status === "online") {
+    try {
       await waitForNotifier(prepared.healthUrl, prepared.healthResponse)
-      console.info(`알림: 실행 중 (${formatUptime(existing.startedAt)})`)
-      return
+    } catch (error) {
+      throw new OperationError("health-check", NOTIFIER_TARGET, error)
     }
-    if (existing !== undefined) {
+    return { target: NOTIFIER_TARGET, outcome: "unchanged" }
+  }
+  if (existing !== undefined) {
+    try {
       await mutatePm2(mutation, ["delete", NOTIFIER_PROCESS_NAME])
+    } catch (error) {
+      throw new OperationError("delete", NOTIFIER_TARGET, error)
     }
+  }
+  try {
     await startPm2App(mutation, {
       name: NOTIFIER_PROCESS_NAME,
       script: process.execPath,
@@ -99,26 +109,31 @@ export const startOrRestartNotifier = async (
       cwd: NOTIFIER_ROOT,
       env: prepared.env,
     })
-    await waitForNotifier(prepared.healthUrl, prepared.healthResponse)
-    console.info("알림: 시작됨")
   } catch (error) {
-    const label = action === "start" ? "시작" : "재시작"
-    throw new Error(`알림: ${label} 실패: ${errorMessage(error)}`, { cause: error })
+    throw new OperationError("start", NOTIFIER_TARGET, error)
+  }
+  try {
+    await waitForNotifier(prepared.healthUrl, prepared.healthResponse)
+  } catch (error) {
+    throw new OperationError("health-check", NOTIFIER_TARGET, error)
+  }
+  return {
+    target: NOTIFIER_TARGET,
+    outcome: action === "restart" && existing !== undefined ? "restarted" : "started",
   }
 }
 
 export const stopNotifier = async (
   existing: Pm2Process | undefined,
   mutation: Pm2MutationContext,
-): Promise<void> => {
+): Promise<OperationResult> => {
   if (existing === undefined) {
-    console.info("대상 프로세스가 없습니다.")
-    return
+    return { target: NOTIFIER_TARGET, outcome: "unchanged" }
   }
   try {
     await mutatePm2(mutation, ["delete", NOTIFIER_PROCESS_NAME])
   } catch (error) {
-    throw new Error(`알림: 중지 실패: ${errorMessage(error)}`, { cause: error })
+    throw new OperationError("delete", NOTIFIER_TARGET, error)
   }
-  console.info("알림: 중지됨")
+  return { target: NOTIFIER_TARGET, outcome: "stopped" }
 }
