@@ -38,7 +38,7 @@ Slack 보안 모델상 우회할 수 없어 사람이 웹 UI에서 처리한다.
 
 ## 검증
 
-`~/.config/symphony/env`에 README 설정 표의 네 값을 기입하고, `notifier/`에서 `pnpm install`을 마친 뒤 `symphonyctl notifier start`로 실행한다. `SYMPHONY_NOTIFY_URL`로 `started` 이벤트를 보내 대상 대화에 본문 메시지가 게시되는지 확인한다 (페이로드 형식은 README의 이벤트 인터페이스). 실패하면 `pm2 logs symphony-notifier`에서 Slack 오류(`invalid_auth`, `not_in_channel` 등)를 확인한다.
+`~/.config/symphony/env`에 README 설정 표의 네 값을 기입하고, `notifier/`에서 `pnpm install`을 마친 뒤 `symphonyctl notifier start`로 실행한다. `SYMPHONY_NOTIFY_URL`로 `started` 이벤트를 보내 대상 대화에 본문 메시지가 게시되는지 확인한다 (페이로드 형식은 README의 이벤트 인터페이스). 실패하면 `pm2 logs symphony:notifier`에서 Slack 오류(`invalid_auth`, `not_in_channel` 등)를 확인한다.
 
 ## 배경: 도구 선택
 

@@ -2,7 +2,7 @@ import { constants } from "node:fs"
 import { access } from "node:fs/promises"
 import { join } from "node:path"
 
-import { LOGS_ROOT, NOTIFIER_PROCESS_NAME, PROCESS_PREFIX, ROOT } from "./constants.ts"
+import { LOGS_ROOT, NOTIFIER_PROCESS_NAME, ROOT } from "./constants.ts"
 import { buildEnv, readSharedEnv } from "./env.ts"
 import { prepareNotifier, startOrRestartNotifier, stopNotifier } from "./notifier.ts"
 import { OperationError } from "./output.ts"
@@ -13,10 +13,10 @@ import { readSymphonyProcesses } from "./pm2.ts"
 import type { Pm2Process } from "./pm2.ts"
 import { findExecutable } from "./process.ts"
 import {
-  instanceId,
+  instancePath,
   lookupInstance,
   lookupTarget,
-  parseInstanceId,
+  parseProcessName,
   processName,
   readRegistry,
   selectInstances,
@@ -32,7 +32,7 @@ export const buildArgs = (instance: Instance): string[] => [
   "--",
   "./bin/symphony",
   "--logs-root",
-  join(LOGS_ROOT, instanceId(instance.alias, instance.workflow)),
+  join(LOGS_ROOT, instancePath(instance.alias, instance.workflow)),
   "--i-understand-that-this-will-be-running-without-the-usual-guardrails",
   workflowPath(instance),
 ]
@@ -67,7 +67,7 @@ const runningRefs = (
   Array.from(processes.keys())
     .toSorted()
     .flatMap((name) => {
-      const ref = parseInstanceId(name.slice(PROCESS_PREFIX.length))
+      const ref = parseProcessName(name)
       if (ref === undefined || (workflow !== undefined && ref.workflow !== workflow)) return []
       return [ref]
     })
@@ -250,7 +250,7 @@ export const runStop = async (
   const refs = Array.from(processes.keys())
     .toSorted()
     .flatMap((name) => {
-      const ref = parseInstanceId(name.slice(PROCESS_PREFIX.length))
+      const ref = parseProcessName(name)
       if (ref === undefined) return []
       const matches =
         aliases.length > 0

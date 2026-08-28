@@ -1,9 +1,9 @@
 import { z } from "zod"
 
-import { NOTIFIER_PROCESS_NAME, PROCESS_PREFIX } from "./constants.ts"
+import { NOTIFIER_PROCESS_NAME } from "./constants.ts"
 import { PM2_STATUSES } from "./pm2.ts"
 import type { Pm2Process, Pm2Status } from "./pm2.ts"
-import { WORKFLOW_NAMES, parseInstanceId, processName } from "./registry.ts"
+import { WORKFLOW_NAMES, parseProcessName, processName } from "./registry.ts"
 import type { Target, WorkflowName } from "./registry.ts"
 
 export const MACHINE_STATUSES = [
@@ -130,7 +130,7 @@ export const buildMachineStatus = (
     )
     .toSorted((left, right) => left.name.localeCompare(right.name))
     .map((processInfo): OrphanedProcessStatus => {
-      const ref = parseInstanceId(processInfo.name.slice(PROCESS_PREFIX.length))
+      const ref = parseProcessName(processInfo.name)
       return {
         processName: processInfo.name,
         alias: ref?.alias ?? null,

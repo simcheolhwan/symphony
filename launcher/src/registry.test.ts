@@ -1,5 +1,5 @@
 import { REGISTRY_PATH } from "./constants.ts"
-import { parseRegistry } from "./registry.ts"
+import { instancePath, parseProcessName, parseRegistry, processName } from "./registry.ts"
 
 const valid = {
   myrepo: {
@@ -11,6 +11,27 @@ const valid = {
     },
   },
 }
+
+describe("PM2 프로세스 이름", () => {
+  it("워크플로와 하이픈이 포함된 별칭을 생성하고 복원한다", () => {
+    const name = processName("my-repo", "pr-reviewer")
+    expect(name).toBe("symphony:pr-reviewer:my-repo")
+    expect(parseProcessName(name)).toEqual({ alias: "my-repo", workflow: "pr-reviewer" })
+  })
+
+  it.each(["symphony:notifier", "symphony:unknown:myrepo", "symphony:linear:myrepo:extra"])(
+    "인스턴스 이름이 아닌 %s를 복원하지 않는다",
+    (name) => {
+      expect(parseProcessName(name)).toBeUndefined()
+    },
+  )
+})
+
+describe("인스턴스 경로", () => {
+  it("별칭 아래에 워크플로 디렉터리를 둔다", () => {
+    expect(instancePath("my-repo", "pr-author")).toBe("my-repo/pr-author")
+  })
+})
 
 describe("parseRegistry", () => {
   it("targets.json을 도메인 인스턴스로 변환하고 기본값을 적용한다", () => {

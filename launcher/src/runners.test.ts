@@ -132,7 +132,7 @@ describe("--with-notifier lifecycle", () => {
     ])
     expect(mocks.events).toEqual([
       `start:${NOTIFIER_PROCESS_NAME}`,
-      "start:symphony-alpha-pr-author",
+      "start:symphony:pr-author:alpha",
     ])
 
     mocks.events.length = 0
@@ -165,7 +165,7 @@ describe("--with-notifier lifecycle", () => {
 
     expect(mocks.events).toEqual([
       `start:${NOTIFIER_PROCESS_NAME}`,
-      "start:symphony-alpha-pr-author",
+      "start:symphony:pr-author:alpha",
     ])
   })
 
@@ -209,7 +209,7 @@ describe("--with-notifier lifecycle", () => {
   })
 
   it("모든 인스턴스를 먼저 중지하고 notifier를 중지하며 반복 호출은 변경하지 않는다", async () => {
-    addOnlineProcess("symphony-alpha-pr-author")
+    addOnlineProcess("symphony:pr-author:alpha")
     addOnlineProcess(NOTIFIER_PROCESS_NAME)
     await expect(runStop([], undefined, true)).resolves.toEqual([
       {
@@ -219,7 +219,7 @@ describe("--with-notifier lifecycle", () => {
       { target: { type: "notifier" }, outcome: "stopped" },
     ])
     expect(mocks.events).toEqual([
-      "delete:symphony-alpha-pr-author",
+      "delete:symphony:pr-author:alpha",
       `delete:${NOTIFIER_PROCESS_NAME}`,
     ])
 
@@ -231,7 +231,7 @@ describe("--with-notifier lifecycle", () => {
   })
 
   it("notifier와 기존 전체 restart 대상을 함께 재시작한다", async () => {
-    addOnlineProcess("symphony-alpha-pr-author")
+    addOnlineProcess("symphony:pr-author:alpha")
     addOnlineProcess(NOTIFIER_PROCESS_NAME)
     await expect(
       runStartOrRestart("restart", [], undefined, { all: false, withNotifier: true }),
@@ -245,13 +245,13 @@ describe("--with-notifier lifecycle", () => {
     expect(mocks.events).toEqual([
       `delete:${NOTIFIER_PROCESS_NAME}`,
       `start:${NOTIFIER_PROCESS_NAME}`,
-      "delete:symphony-alpha-pr-author",
-      "start:symphony-alpha-pr-author",
+      "delete:symphony:pr-author:alpha",
+      "start:symphony:pr-author:alpha",
     ])
   })
 
   it("일부 시작이 실패하면 실패 단계와 대상만 보고한다", async () => {
-    mocks.failOnStart = "symphony-alpha-pr-author"
+    mocks.failOnStart = "symphony:pr-author:alpha"
     const error = captureError(
       runStartOrRestart("start", [], undefined, { all: true, withNotifier: true }),
     )
@@ -262,7 +262,7 @@ describe("--with-notifier lifecycle", () => {
     })
     expect(mocks.events).toEqual([
       `start:${NOTIFIER_PROCESS_NAME}`,
-      "start:symphony-alpha-pr-author",
+      "start:symphony:pr-author:alpha",
     ])
     expect(mocks.processes.has(NOTIFIER_PROCESS_NAME)).toBe(true)
   })

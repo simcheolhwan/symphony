@@ -28,8 +28,8 @@ describe("buildMachineStatus", () => {
     const status = buildMachineStatus(
       registry,
       processes(
-        pm2Process("symphony-alpha-linear", "online"),
-        pm2Process("symphony-alpha-pr-author", "online"),
+        pm2Process("symphony:linear:alpha", "online"),
+        pm2Process("symphony:pr-author:alpha", "online"),
         pm2Process(NOTIFIER_PROCESS_NAME, "online"),
       ),
     )
@@ -69,7 +69,7 @@ describe("buildMachineStatus", () => {
   it("실행 중과 중지 상태가 섞이면 partial이다", () => {
     const status = buildMachineStatus(
       registry,
-      processes(pm2Process("symphony-alpha-linear", "online")),
+      processes(pm2Process("symphony:linear:alpha", "online")),
     )
     expect(status.status).toBe("partial")
   })
@@ -79,7 +79,7 @@ describe("buildMachineStatus", () => {
     (pm2Status) => {
       const status = buildMachineStatus(
         registry,
-        processes(pm2Process("symphony-alpha-linear", pm2Status)),
+        processes(pm2Process("symphony:linear:alpha", pm2Status)),
       )
       expect(status.status).toBe("transitioning")
       expect(status.instances[0]?.status).toBe(pm2Status)
@@ -89,7 +89,7 @@ describe("buildMachineStatus", () => {
   it("인스턴스나 notifier의 오류를 errored로 집계한다", () => {
     const instanceError = buildMachineStatus(
       registry,
-      processes(pm2Process("symphony-alpha-linear", "errored")),
+      processes(pm2Process("symphony:linear:alpha", "errored")),
     )
     const notifierError = buildMachineStatus(
       registry,
@@ -104,13 +104,13 @@ describe("buildMachineStatus", () => {
     const status = buildMachineStatus(
       registry,
       processes(
-        pm2Process("symphony-orphan-pr-reviewer", "online"),
-        pm2Process("symphony-legacy", "stopped"),
+        pm2Process("symphony:pr-reviewer:orphan", "online"),
+        pm2Process("symphony:legacy", "stopped"),
       ),
     )
     expect(status.orphanedProcesses).toEqual([
       {
-        processName: "symphony-legacy",
+        processName: "symphony:legacy",
         alias: null,
         workflow: null,
         status: "stopped",
@@ -119,7 +119,7 @@ describe("buildMachineStatus", () => {
         startedAt: null,
       },
       {
-        processName: "symphony-orphan-pr-reviewer",
+        processName: "symphony:pr-reviewer:orphan",
         alias: "orphan",
         workflow: "pr-reviewer",
         status: "online",

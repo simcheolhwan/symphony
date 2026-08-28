@@ -3,7 +3,7 @@ import { join } from "node:path"
 
 import { ENV_PATH, WORKSPACE_ROOT } from "./constants.ts"
 import { isRecord } from "./guards.ts"
-import { instanceId, instanceName, workflowLabel } from "./registry.ts"
+import { instanceName, instancePath, workflowLabel } from "./registry.ts"
 import type { Instance } from "./registry.ts"
 
 // source 대신 KEY=VALUE만 해석한다. 값의 따옴표 한 겹은 벗기고 변수 확장과 이스케이프는 지원하지 않는다.
@@ -55,11 +55,11 @@ export const buildEnv = (
   instance: Instance,
   sharedEnv: Record<string, string>,
 ): Record<string, string> => {
-  const id = instanceId(instance.alias, instance.workflow)
+  const path = instancePath(instance.alias, instance.workflow)
   const env: Record<string, string> = {
     ...sharedEnv,
     GITHUB_REPO: instance.repo,
-    SYMPHONY_WORKSPACE_ROOT: join(WORKSPACE_ROOT, id),
+    SYMPHONY_WORKSPACE_ROOT: join(WORKSPACE_ROOT, path),
     SYMPHONY_INSTANCE_NAME: instanceName(instance),
     // 알림 본문이 워크플로와 대상을 따로 표시하므로 조립된 인스턴스 이름과 별개로 넘긴다.
     SYMPHONY_WORKFLOW_LABEL: workflowLabel(instance.workflow),
