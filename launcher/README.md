@@ -14,7 +14,7 @@ flowchart LR
 
 escript는 다음 인자로 기동한다.
 
-- `--logs-root ~/.local/state/symphony/<별칭>-<워크플로>`: 인스턴스별 로그 루트. escript는 그 아래 `log/symphony.log.<N>` 순환 파일에 기록한다.
+- `--logs-root ~/.local/state/symphony/<별칭>/<워크플로>`: 인스턴스별 로그 루트. escript는 그 아래 `log/symphony.log.<N>` 순환 파일에 기록한다.
 - `--i-understand-that-this-will-be-running-without-the-usual-guardrails`: 업스트림의 무인 실행 확인 플래그. 런처는 이 플래그를 항상 전달하므로 모든 인스턴스가 이 확인을 승인한 상태로 기동된다.
 - `--port`는 넘기지 않으므로 상태 대시보드는 시작되지 않는다. 작업 관측은 Slack 알림([`notifier/`](../notifier/README.md))과 트래커가 맡는다.
 
@@ -44,7 +44,7 @@ symphonyctl notifier start|stop|restart
 - 조작 명령은 목표 상태에 이미 도달한 대상을 변경하지 않는다. 일부 PM2 조작이 실패하면 앞선 변경을 롤백하거나 별도 스냅샷으로 저장하지 않는다. 현재 상태는 `ls`로 다시 확인한다.
 - `logs`는 escript가 남기는 disk_log 순환 파일 중 최근 파일을 마지막 100줄부터 `tail -f`로 따라간다.
 - `run`은 PM2를 거치지 않고 같은 명령을 전면에서 실행한다. 디버깅용이다. 현재 셸 환경은 상속하지 않고 시스템 필수 변수(`HOME` 등)와 주입 환경변수만 전달해 PM2 실행과 같은 조건을 유지한다.
-- `notifier`는 알림 서버([`notifier/`](../notifier/README.md)) 전용 하위 명령이다. 인스턴스가 아니므로 별칭과 워크플로가 없다. 로그는 `pm2 logs symphony-notifier`로 확인한다.
+- `notifier`는 알림 서버([`notifier/`](../notifier/README.md)) 전용 하위 명령이다. 인스턴스가 아니므로 별칭과 워크플로가 없다. 로그는 `pm2 logs symphony:notifier`로 확인한다.
 
 ## 출력 규격
 
@@ -78,7 +78,7 @@ symphonyctl notifier start|stop|restart
   ],
   "orphanedProcesses": [
     {
-      "processName": "symphony-oldrepo-pr-reviewer",
+      "processName": "symphony:pr-reviewer:oldrepo",
       "alias": "oldrepo",
       "workflow": "pr-reviewer",
       "status": "stopped",
@@ -100,7 +100,7 @@ symphonyctl notifier start|stop|restart
 | --- | --- |
 | `status` | 기기 전체 집계 상태. `online`, `stopped`, `partial`, `transitioning`, `errored` 중 하나다 |
 | `instances` | `targets.json`에서 활성화한 모든 대상과 워크플로 조합이다. PM2에 없으면 `status: "stopped"`, `registered: false`로 남는다 |
-| `orphanedProcesses` | `symphony-` 접두사로 PM2에 등록됐지만 현재 활성 인스턴스나 notifier가 아닌 프로세스다. 이름을 인스턴스 ID로 해석할 수 없으면 `alias`와 `workflow`가 `null`이다 |
+| `orphanedProcesses` | `symphony:` 접두사로 PM2에 등록됐지만 현재 활성 인스턴스나 notifier가 아닌 프로세스다. 이름을 인스턴스 ID로 해석할 수 없으면 `alias`와 `workflow`가 `null`이다 |
 | `notifier` | 기기당 하나인 notifier 상태다. PM2에 없으면 `status: "stopped"`, `registered: false`다 |
 | `registered` | 해당 리소스가 PM2에 등록됐는지 나타낸다. 등록된 PM2 프로세스 자체가 `stopped`인 경우에도 `true`다 |
 | `pid` | 실행 중인 프로세스의 PID다. PM2가 PID를 `0`으로 보고하거나 프로세스가 등록되지 않았으면 `null`이다 |
@@ -199,7 +199,7 @@ symphonyctl notifier start|stop|restart
 | `LINEAR_PROJECT_SLUG` | target의 `project` (`linear` 워크플로만) |
 | `SYMPHONY_MODEL` | 워크플로 설정의 `model` (지정했을 때만) |
 | `SYMPHONY_MODEL_REASONING_EFFORT` | 워크플로 설정의 `model_reasoning_effort` |
-| `SYMPHONY_WORKSPACE_ROOT` | `~/.symphony/<별칭>-<워크플로>` |
+| `SYMPHONY_WORKSPACE_ROOT` | `~/.symphony/<별칭>/<워크플로>` |
 | `SYMPHONY_INSTANCE_NAME` | 알림 스레드를 인스턴스별로 가르는 이름 (예: `Linear · myrepo`) |
 | `SYMPHONY_WORKFLOW_LABEL` | 알림 본문에 표시하는 워크플로 레이블 |
 | `SYMPHONY_TARGET_NAME` | 알림 본문에 표시하는 대상 이름 (별칭) |
@@ -207,7 +207,7 @@ symphonyctl notifier start|stop|restart
 
 ## 프로세스 모델
 
-- 프로세스 이름은 `symphony-<별칭>-<워크플로>`, 알림 서버는 `symphony-notifier`다. 워크스페이스와 로그 경로도 같은 식별자에서 파생한다.
+- 프로세스 이름은 `symphony:<워크플로>:<별칭>`, 알림 서버는 `symphony:notifier`다. 워크스페이스와 로그 경로는 `<별칭>/<워크플로>` 구조다.
 - fork 모드, `min_uptime` 10초, `max_restarts` 5, SIGTERM 후 15초 강제 종료로 등록한다.
 - `pm2 startup`, `pm2 save`, `pm2 resurrect`를 사용하지 않으며 기기 재시작 뒤 프로세스 복원을 전제하지 않는다.
 - `pm2 jlist` 응답은 프로세스 이름, 상태, 시작 시각, PID를 스키마로 검증한다. 형식이 어긋나면 기존 JSON, 배열, 프로세스, 필드 문맥을 포함한 오류로 명령을 중단한다.

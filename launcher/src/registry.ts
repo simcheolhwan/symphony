@@ -51,26 +51,18 @@ export const requireAlias = (value: string): string => {
   return value
 }
 
-// pm2 프로세스 이름, 워크스페이스 경로, 로그 경로만 이 식별자에서 파생하고 사용자에게는 노출하지 않는다.
-export const instanceId = (alias: string, workflow: WorkflowName): string => `${alias}-${workflow}`
+export const instancePath = (alias: string, workflow: WorkflowName): string => join(alias, workflow)
 
 export const processName = (alias: string, workflow: WorkflowName): string =>
-  `${PROCESS_PREFIX}${instanceId(alias, workflow)}`
+  `${PROCESS_PREFIX}${workflow}:${alias}`
 
-// 별칭에도 -가 들어가므로 워크플로 이름을 접미사로 떼어 별칭을 복원한다.
-export const parseInstanceId = (id: string): InstanceRef | undefined => {
-  const workflow = WORKFLOW_NAMES.find((name) => id.endsWith(`-${name}`))
-  if (workflow === undefined) return undefined
-  const alias = id.slice(0, -(workflow.length + 1))
-  return alias === "" ? undefined : { alias, workflow }
-}
-
-export const formatRef = (ref: InstanceRef): string => `${ref.alias} (${ref.workflow})`
-
-export const formatProcessName = (name: string): string => {
-  const id = name.slice(PROCESS_PREFIX.length)
-  const ref = parseInstanceId(id)
-  return ref === undefined ? id : formatRef(ref)
+export const parseProcessName = (name: string): InstanceRef | undefined => {
+  if (!name.startsWith(PROCESS_PREFIX)) return undefined
+  const [workflow, alias, ...rest] = name.slice(PROCESS_PREFIX.length).split(":")
+  if (workflow === undefined || !isWorkflowName(workflow) || alias === undefined || alias === "") {
+    return undefined
+  }
+  return rest.length === 0 ? { alias, workflow } : undefined
 }
 
 export const workflowLabel = (workflow: WorkflowName): string => WORKFLOW_LABELS[workflow]

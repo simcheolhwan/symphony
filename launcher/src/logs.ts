@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { LOGS_ROOT } from "./constants.ts"
 import { buildEnv, readSharedEnv } from "./env.ts"
 import { findExecutable, spawnForeground } from "./process.ts"
-import { instanceId, lookupInstance, readRegistry } from "./registry.ts"
+import { instancePath, lookupInstance, readRegistry } from "./registry.ts"
 import type { WorkflowName } from "./registry.ts"
 import { buildArgs, requireWorkflowFile } from "./runners.ts"
 
@@ -19,7 +19,7 @@ const readLogEntries = async (directory: string): Promise<string[]> => {
 }
 
 export const runLogs = async (alias: string, workflow: WorkflowName): Promise<number> => {
-  const directory = join(LOGS_ROOT, instanceId(alias, workflow), "log")
+  const directory = join(LOGS_ROOT, instancePath(alias, workflow), "log")
   const entries = await readLogEntries(directory)
   const candidates = entries.filter((name) => /^symphony\.log\.\d+$/.test(name))
   // disk_log의 wrap 로그는 파일 여러 개를 순환하므로 마지막으로 기록된 파일을 따라간다.
