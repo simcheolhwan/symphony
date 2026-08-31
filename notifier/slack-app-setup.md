@@ -25,8 +25,69 @@ Slack 보안 모델상 우회할 수 없어 사람이 웹 UI에서 처리한다.
 ```
 
 - 런타임에 필요한 스코프는 `chat:write`뿐이다. 사용자 멘션은 ID를 텍스트에 넣는 것이므로 추가 스코프가 없다. `channels:read`(채널 ID 조회)와 `channels:join`(봇 채널 참여)은 공개 채널 설치 단계를 API로 처리하기 위해 넣는다.
-- 표시명은 Slack 앱 설정에만 있는 값이라 코드와 무관하다. 이미 발급받아 쓰고 있는 앱이 있으면 표시명을 바꾸지 않는다 — 기존 스레드의 발신자 표기만 바뀌고 얻는 것이 없다.
+- 표시명은 Slack 앱 설정에만 있는 값이라 코드와 무관하다. 이미 발급받아 쓰고 있는 앱이 있으면 표시명을 바꾸지 않는다 — 기존 스레드의 발신자 표기만 바뀌고 얻는 것이 없다. 그래도 바꿔야 하면 [앱 이름과 아이콘 변경](#앱-이름과-아이콘-변경)을 따른다.
 - `redirect_urls`는 HTTPS만 허용된다. `https://localhost`는 어디에도 코드를 전송하지 않기 위한 값이며 수신 서버가 필요 없다.
+
+## 앱 이름과 아이콘 변경
+
+이미 만든 앱의 표시명과 아이콘을 바꾸는 절차다. 스코프를 건드리지 않으므로 재설치도 `xoxb-` 토큰 재발급도 없다. 표시명과 아이콘은 앱 프로필 값이라 코드와 무관하고, 바꾸면 기존 스레드의 표기에도 반영된다.
+
+`xoxb-` 봇 토큰으로는 둘 다 바꿀 수 없다. 봇 토큰은 설치된 앱이 워크스페이스에 대고 하는 일(`chat.postMessage` 등)의 자격증명이지 앱 설정을 고치는 자격증명이 아니다. `chat.postMessage`의 `username`과 `icon_url` 오버라이드(`chat:write.customize` 스코프)는 메시지마다 표기를 갈아끼우는 것이라 앱 자체는 그대로고, 아이콘을 공개 URL에 호스팅해야 해서 쓰지 않는다.
+
+아이콘 원본은 [`assets/icon.svg`](assets/icon.svg), 업로드용 렌더는 [`assets/icon.png`](assets/icon.png)다. OpenAI 블라썸 마크를 흰 배경(`#FFFFFF`)에 검정(`#000000`)으로 512x512 정사각에 배치했고 사방 여백은 변의 13%다. 512는 Slack이 요구하는 아이콘 하한이자 공식 CLI가 업로드 직전 정사각으로 리사이즈하는 크기다. SVG가 원본이므로 여백이나 크기를 바꾸려면 SVG의 `transform`을 고쳐 다시 렌더한다.
+
+### 이름: `apps.manifest.update`
+
+App Configuration Token(`xoxe.xoxp-...`)만 있으면 끝난다. 발급은 [사람이 해야 하는 두 가지](#사람이-해야-하는-두-가지)와 같다. manifest는 부분 갱신이 아니라 전체 교체이므로 export한 것을 고쳐서 되돌려준다.
+
+```sh
+CONFIG_TOKEN=xoxe.xoxp-...
+APP_ID=A0123456789
+
+curl -sS https://slack.com/api/apps.manifest.export \
+  -H "Authorization: Bearer $CONFIG_TOKEN" \
+  -d "app_id=$APP_ID" | jq .manifest > manifest.json
+
+# manifest.json의 display_information.name과 features.bot_user.display_name을 고친다
+
+curl -sS https://slack.com/api/apps.manifest.update \
+  -H "Authorization: Bearer $CONFIG_TOKEN" \
+  --data-urlencode "app_id=$APP_ID" \
+  --data-urlencode "manifest=$(cat manifest.json)" | jq
+```
+
+응답의 `permissions_updated`가 `true`면 스코프가 함께 바뀐 것이라 재설치가 필요하다. 이름만 고쳤다면 `false`여야 한다.
+
+### 아이콘: `apps.icon.set`
+
+아이콘은 manifest 필드가 아니라서 `apps.manifest.update`로 바뀌지 않고, 공개된 Web API 메서드 목록에도 아이콘 설정 메서드가 없다. 공식 CLI가 실제로 호출하는 것은 문서화되지 않은 `apps.icon.set`이다 ([`slackapi/slack-cli`](https://github.com/slackapi/slack-cli)의 `internal/api/icon.go`). multipart로 `file`과 `app_id`를 보내고 토큰은 Bearer 헤더에 싣는다.
+
+```sh
+curl -sS https://slack.com/api/apps.icon.set \
+  -H "Authorization: Bearer $CONFIG_TOKEN" \
+  -F "app_id=$APP_ID" \
+  -F "file=@assets/icon.png;type=image/png" | jq
+```
+
+문서화되지 않은 메서드이므로 App Configuration Token을 받아준다는 보장이 없다. `{"ok": true}`가 아니면 아래 두 경로로 내려간다.
+
+### 대안 1: 공식 CLI
+
+CLI는 `apps.icon.set`을 자기 로그인 토큰으로 호출한다. 아이콘 업로드는 2026년 8월 `set-icon` 실험이 종료되면서 Slack 호스팅이 아닌 앱에도 기본 지원된다.
+
+```sh
+slack login                                                    # ~/.slack/credentials.json에 토큰 저장
+slack app link --team T0123456789 --app "$APP_ID" --environment deployed
+slack install                                                  # notifier/에서 실행하면 assets/icon.png를 자동 인식
+```
+
+CLI는 `SLACK_CLI_APP_ICON_PATH` → manifest의 `icon` 필드 → `assets/` 다음 프로젝트 루트의 `icon.{png,jpg,jpeg,gif}` 순으로 파일을 찾는다. `notifier/`의 배치가 세 번째 규칙에 그대로 맞는다.
+
+`slack install`은 아이콘을 올리기 전에 앱을 재설치한다. 재설치는 `xoxb-` 토큰을 재발급할 수 있으므로 이 경로를 쓴 뒤에는 `~/.config/symphony/env`의 `SYMPHONY_SLACK_BOT_TOKEN`이 여전히 유효한지 확인한다. curl 직접 호출을 먼저 시도하는 이유가 이것이다.
+
+### 대안 2: 웹 UI
+
+https://api.slack.com/apps 에서 앱 선택 → **Basic Information** → **Display Information**. 같은 화면에서 **App name**과 **App icon**을 모두 바꾸고 **Save Changes**를 누른다. 토큰이 필요 없고 재설치도 일어나지 않는다.
 
 ## 함정
 
@@ -49,6 +110,8 @@ Bolt는 Slack → 앱 방향(이벤트 수신, slash command, 인터랙션, 서�
 ### 공식 Slack CLI를 쓰지 않는 이유
 
 공식 Slack CLI(`slack` 명령)는 앱 라이프사이클 관리 도구이지 토큰 발급 도구가 아니다. `slack run`은 CLI가 관리하는 개발 세션에만 임시 토큰을 주입하고, `slack deploy`로 배포한 앱은 웹 UI에서 잠겨 `xoxb-` 토큰을 발급받을 수 없다. Web API 직접 호출이 상시 실행 데몬용 독립 토큰을 얻는 최소 경로다.
+
+아이콘 설정은 예외다. Web API에 공개된 메서드가 없어 CLI가 유일하게 지원되는 자동화 경로이므로 [앱 이름과 아이콘 변경](#앱-이름과-아이콘-변경)에서 대안으로 둔다. CLI는 `slack login`으로 얻는 자체 토큰을 쓰므로 이 문서의 App Configuration Token과 별개이고, 알림 서버가 쓰는 `xoxb-` 토큰과도 무관하다.
 
 ### 호스팅 방식 비교: 자체 서버 vs Slack 호스팅
 
