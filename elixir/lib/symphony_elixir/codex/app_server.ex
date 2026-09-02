@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   @initialize_id 1
   @thread_start_id 2
   @turn_start_id 3
+  @thread_archive_id 4
   @port_line_bytes 1_048_576
   @max_stream_log_bytes 1_000
   @type session :: %{
@@ -145,6 +146,26 @@ defmodule SymphonyElixir.Codex.AppServer do
   @spec stop_session(session()) :: :ok
   def stop_session(%{port: port}) when is_port(port) do
     stop_port(port)
+  end
+
+  @spec archive_thread(session()) :: :ok | {:error, term()}
+  def archive_thread(%{port: port, thread_id: thread_id})
+      when is_port(port) and is_binary(thread_id) do
+    send_message(port, %{
+      "method" => "thread/archive",
+      "id" => @thread_archive_id,
+      "params" => %{"threadId" => thread_id}
+    })
+
+    case await_response(port, @thread_archive_id) do
+      {:ok, response} when is_map(response) -> :ok
+      {:ok, response} -> {:error, {:invalid_thread_archive_response, response}}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    error -> {:error, {:thread_archive_request_failed, error}}
+  catch
+    kind, reason -> {:error, {:thread_archive_request_failed, {kind, reason}}}
   end
 
   defp validate_workspace_cwd(workspace, nil) when is_binary(workspace) do
@@ -331,7 +352,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     case await_response(port, @thread_start_id) do
       {:ok, %{"thread" => thread_payload}} ->
         case thread_payload do
-          %{"id" => thread_id} -> {:ok, thread_id}
+          %{"id" => thread_id} when is_binary(thread_id) -> {:ok, thread_id}
           _ -> {:error, {:invalid_thread_payload, thread_payload}}
         end
 

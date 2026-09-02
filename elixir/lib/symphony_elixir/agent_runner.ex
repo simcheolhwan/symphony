@@ -93,9 +93,21 @@ defmodule SymphonyElixir.AgentRunner do
       try do
         do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
       after
-        AppServer.stop_session(session)
+        archive_and_stop_session(session, issue)
       end
     end
+  end
+
+  defp archive_and_stop_session(session, issue) do
+    case AppServer.archive_thread(session) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to archive Codex thread for #{issue_context(issue)} thread_id=#{session.thread_id}: #{inspect(reason)}")
+    end
+  after
+    AppServer.stop_session(session)
   end
 
   defp do_run_codex_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do

@@ -21,6 +21,13 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 4. Sends a workflow prompt to Codex
 5. Keeps Codex working on the issue until the work is done
 
+Each Agent Runner worker keeps its Codex thread active across in-worker continuation turns, then
+archives that thread once when the worker ends. Symphony sends `thread/archive` for the exact ID
+returned by `thread/start` over the existing app-server connection before closing it. This applies
+to every workflow without configuration. If thread startup fails, there is no archival request. If
+archival fails, Symphony logs a warning while preserving the worker result, app-server shutdown,
+retry scheduling, and workspace cleanup.
+
 During app-server sessions, the selected tracker adapter may advertise provider-native tools. The
 Linear serves `linear_graphql`, the GitHub adapters serve `github_api`, Jira
 Cloud serves `jira_rest`, Asana serves `asana_api`, and GitLab serves `gitlab_api`. Symphony

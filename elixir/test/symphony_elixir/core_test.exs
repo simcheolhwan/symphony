@@ -2238,6 +2238,9 @@ defmodule SymphonyElixir.CoreTest do
           4)
             printf '%s\\n' '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn-1\"}}}'
             printf '%s\\n' '{\"method\":\"turn/completed\"}'
+            ;;
+          5)
+            printf '%s\\n' '{\"id\":4,\"result\":{}}'
             exit 0
             ;;
           *)
@@ -2323,6 +2326,9 @@ defmodule SymphonyElixir.CoreTest do
               ;;
             4)
               printf '%s\\n' '{\"method\":\"turn/completed\"}'
+              ;;
+            5)
+              printf '%s\\n' '{\"id\":4,\"result\":{}}'
               ;;
             *)
               ;;
@@ -2490,6 +2496,9 @@ defmodule SymphonyElixir.CoreTest do
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-cont-2"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             ;;
+          6)
+            printf '%s\\n' '{"id":4,"result":{}}'
+            ;;
         esac
       done
       """)
@@ -2568,8 +2577,265 @@ defmodule SymphonyElixir.CoreTest do
       refute Enum.at(turn_texts, 1) =~ "You are an agent for this repository."
       assert Enum.at(turn_texts, 1) =~ "Continuation guidance:"
       assert Enum.at(turn_texts, 1) =~ "continuation turn #2 of 3"
+
+      methods =
+        lines
+        |> Enum.filter(&String.starts_with?(&1, "JSON:"))
+        |> Enum.map(&String.trim_leading(&1, "JSON:"))
+        |> Enum.map(&Jason.decode!/1)
+        |> Enum.map(& &1["method"])
+        |> Enum.reject(&is_nil/1)
+
+      assert methods == [
+               "initialize",
+               "initialized",
+               "thread/start",
+               "turn/start",
+               "turn/start",
+               "thread/archive"
+             ]
     after
       System.delete_env("SYMP_TEST_CODEx_TRACE")
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner archives the started thread after a turn error" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-error-archive-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+
+      File.mkdir_p!(test_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+        printf 'JSON:%s\\n' "$line" >> "#{trace_file}"
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            ;;
+          3)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-turn-error"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-error"}}}'
+            printf '%s\\n' '{"method":"turn/failed","params":{"message":"failed"}}'
+            ;;
+          5)
+            printf '%s\\n' '{"id":4,"result":{}}'
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        tracker_api_token: nil,
+        tracker_project_slug: nil,
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server",
+        hook_after_run: "printf 'AFTER_RUN\\n' >> #{trace_file}"
+      )
+
+      issue = %Issue{
+        id: "issue-turn-error",
+        identifier: "MT-TURN-ERROR",
+        title: "Archive after turn error",
+        description: "The turn fails after thread startup",
+        state: "In Progress",
+        dispatchable: true
+      }
+
+      assert_raise RuntimeError, ~r/turn_failed/, fn ->
+        AgentRunner.run(issue)
+      end
+
+      lines = File.read!(trace_file) |> String.split("\n", trim: true)
+
+      archive_requests =
+        lines
+        |> Enum.filter(&String.starts_with?(&1, "JSON:"))
+        |> Enum.map(&String.trim_leading(&1, "JSON:"))
+        |> Enum.map(&Jason.decode!/1)
+        |> Enum.filter(&(&1["method"] == "thread/archive"))
+
+      assert archive_requests == [
+               %{
+                 "id" => 4,
+                 "method" => "thread/archive",
+                 "params" => %{"threadId" => "thread-turn-error"}
+               }
+             ]
+
+      assert List.last(lines) == "AFTER_RUN"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner does not archive when thread startup fails" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-start-failure-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+
+      File.mkdir_p!(test_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+        printf 'JSON:%s\\n' "$line" >> "#{trace_file}"
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            ;;
+          3)
+            printf '%s\\n' '{"id":2,"error":{"code":-32000,"message":"thread start failed"}}'
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        tracker_api_token: nil,
+        tracker_project_slug: nil,
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server",
+        hook_after_run: "printf 'AFTER_RUN\\n' >> #{trace_file}"
+      )
+
+      issue = %Issue{
+        id: "issue-start-failure",
+        identifier: "MT-START-FAILURE",
+        title: "Do not archive without a thread ID",
+        description: "Thread startup fails",
+        state: "In Progress",
+        dispatchable: true
+      }
+
+      assert_raise RuntimeError, ~r/thread start failed/, fn ->
+        AgentRunner.run(issue)
+      end
+
+      trace = File.read!(trace_file)
+      refute trace =~ "\"method\":\"thread/archive\""
+      assert trace =~ "AFTER_RUN"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "archive failure preserves the worker result and post-run cleanup" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-archive-failure-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+
+      File.mkdir_p!(test_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+        printf 'JSON:%s\\n' "$line" >> "#{trace_file}"
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            ;;
+          3)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-archive-failure"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-success"}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            ;;
+          5)
+            printf '%s\\n' '{"id":4,"error":{"code":-32000,"message":"archive failed"}}'
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        tracker_api_token: nil,
+        tracker_project_slug: nil,
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server",
+        hook_after_run: "printf 'AFTER_RUN\\n' >> #{trace_file}"
+      )
+
+      issue = %Issue{
+        id: "issue-archive-failure",
+        identifier: "MT-ARCHIVE-FAILURE",
+        title: "Preserve successful result",
+        description: "Archiving fails after a successful turn",
+        state: "In Progress",
+        dispatchable: true
+      }
+
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   AgentRunner.run(
+                     issue,
+                     nil,
+                     issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end
+                   )
+        end)
+
+      assert log =~
+               "Failed to archive Codex thread for issue_id=issue-archive-failure issue_identifier=MT-ARCHIVE-FAILURE thread_id=thread-archive-failure"
+
+      lines = File.read!(trace_file) |> String.split("\n", trim: true)
+
+      archive_index =
+        Enum.find_index(lines, &String.contains?(&1, "\"method\":\"thread/archive\""))
+
+      after_run_index = Enum.find_index(lines, &(&1 == "AFTER_RUN"))
+
+      assert is_integer(archive_index)
+      assert is_integer(after_run_index)
+      assert archive_index < after_run_index
+    after
       File.rm_rf(test_root)
     end
   end
@@ -2621,6 +2887,9 @@ defmodule SymphonyElixir.CoreTest do
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-max-2"}}}'
             printf '%s\\n' '{"method":"turn/completed"}'
             ;;
+          6)
+            printf '%s\\n' '{"id":4,"result":{}}'
+            ;;
         esac
       done
       """)
@@ -2666,6 +2935,7 @@ defmodule SymphonyElixir.CoreTest do
       trace = File.read!(trace_file)
       assert length(String.split(trace, "RUN", trim: true)) == 1
       assert length(Regex.scan(~r/"method":"turn\/start"/, trace)) == 2
+      assert length(Regex.scan(~r/"method":"thread\/archive"/, trace)) == 1
     after
       System.delete_env("SYMP_TEST_CODEx_TRACE")
       File.rm_rf(test_root)

@@ -76,6 +76,77 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  test "app server archives the started thread and waits for the matching response" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-thread-archive-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-ARCHIVE")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+
+      File.mkdir_p!(workspace)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+        printf 'JSON:%s\n' "$line" >> "#{trace_file}"
+        case "$count" in
+          1)
+            printf '%s\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            ;;
+          3)
+            printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-from-start"}}}'
+            ;;
+          4)
+            printf '%s\n' '{"id":404,"result":{}}'
+            printf '%s\n' '{"id":4,"result":{}}'
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server"
+      )
+
+      assert {:ok, session} = AppServer.start_session(workspace)
+
+      try do
+        assert :ok = AppServer.archive_thread(session)
+      after
+        AppServer.stop_session(session)
+      end
+
+      archive_request =
+        trace_file
+        |> File.read!()
+        |> String.split("\n", trim: true)
+        |> Enum.map(&String.trim_leading(&1, "JSON:"))
+        |> Enum.map(&Jason.decode!/1)
+        |> Enum.find(&(&1["method"] == "thread/archive"))
+
+      assert archive_request == %{
+               "id" => 4,
+               "method" => "thread/archive",
+               "params" => %{"threadId" => "thread-from-start"}
+             }
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   @tag :timing
   test "turn timeout resets on stream updates and fires after silence" do
     test_root =

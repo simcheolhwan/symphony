@@ -1083,6 +1083,21 @@ Continuation processing:
 - The app-server subprocess SHOULD remain alive across those continuation turns and be stopped only
   when the worker run is ending.
 
+Worker thread archival:
+
+- Every Agent Runner worker that receives a successful `thread/start` response MUST archive the
+  exact thread ID returned by that response.
+- The thread MUST remain active between in-worker continuation turns and MUST be archived once,
+  after the final turn result is known.
+- Before stopping the app-server connection or beginning workspace cleanup, the worker MUST send
+  `thread/archive` over the same initialized connection and wait for the response matching that
+  request.
+- A worker that does not receive a thread ID because `thread/start` fails MUST NOT attempt archival.
+- Turn completion, turn failure, cancellation, timeout, and operator-input requirements MUST all
+  lead to the same archival attempt when a thread ID exists.
+- An archival failure MUST be logged as a warning and MUST NOT replace the worker result, prevent
+  app-server shutdown, change retry scheduling, or prevent workspace cleanup.
+
 Transport handling requirements:
 
 - Follow the transport and framing rules of the targeted Codex app-server version.
@@ -1223,7 +1238,8 @@ Behavior:
 2. Build prompt from workflow template.
 3. Start app-server session.
 4. Forward app-server events to orchestrator.
-5. On any error, fail the worker attempt (the orchestrator will retry).
+5. Archive the started Codex thread when the worker ends.
+6. On any agent error, fail the worker attempt (the orchestrator will retry).
 
 Note:
 
@@ -2045,57 +2061,56 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
   if workspace failed:
     fail_worker("workspace error")
 
-  if run_hook("before_run", workspace.path) failed:
-    fail_worker("before_run hook error")
+  try:
+    if run_hook("before_run", workspace.path) failed:
+      fail_worker("before_run hook error")
 
-  session = app_server.start_session(workspace=workspace.path)
-  if session failed:
+    session = app_server.start_session(workspace=workspace.path)
+    if session failed:
+      fail_worker("agent session startup error")
+
+    try:
+      max_turns = config.agent.max_turns
+      turn_number = 1
+
+      while true:
+        prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
+        if prompt failed:
+          fail_worker("prompt error")
+
+        turn_result = app_server.run_turn(
+          session=session,
+          prompt=prompt,
+          issue=issue,
+          on_message=(msg) -> send(orchestrator_channel, {codex_update, issue.id, msg})
+        )
+
+        if turn_result failed:
+          fail_worker("agent turn error")
+
+        refreshed_issue = tracker.fetch_issues_by_ids([issue.id])
+        if refreshed_issue failed:
+          fail_worker("issue state refresh error")
+
+        if refreshed_issue is empty:
+          break
+
+        issue = refreshed_issue[0]
+
+        if issue.state is not active or not issue_routable(issue):
+          break
+
+        if turn_number >= max_turns:
+          break
+
+        turn_number = turn_number + 1
+    finally:
+      archive_result = app_server.archive_thread(session, thread_id=session.thread_id)
+      if archive_result failed:
+        log_warning("Codex thread archival failed", archive_result.error)
+      app_server.stop_session(session)
+  finally:
     run_hook_best_effort("after_run", workspace.path)
-    fail_worker("agent session startup error")
-
-  max_turns = config.agent.max_turns
-  turn_number = 1
-
-  while true:
-    prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
-    if prompt failed:
-      app_server.stop_session(session)
-      run_hook_best_effort("after_run", workspace.path)
-      fail_worker("prompt error")
-
-    turn_result = app_server.run_turn(
-      session=session,
-      prompt=prompt,
-      issue=issue,
-      on_message=(msg) -> send(orchestrator_channel, {codex_update, issue.id, msg})
-    )
-
-    if turn_result failed:
-      app_server.stop_session(session)
-      run_hook_best_effort("after_run", workspace.path)
-      fail_worker("agent turn error")
-
-    refreshed_issue = tracker.fetch_issues_by_ids([issue.id])
-    if refreshed_issue failed:
-      app_server.stop_session(session)
-      run_hook_best_effort("after_run", workspace.path)
-      fail_worker("issue state refresh error")
-
-    if refreshed_issue is empty:
-      break
-
-    issue = refreshed_issue[0]
-
-    if issue.state is not active or not issue_routable(issue):
-      break
-
-    if turn_number >= max_turns:
-      break
-
-    turn_number = turn_number + 1
-
-  app_server.stop_session(session)
-  run_hook_best_effort("after_run", workspace.path)
 
   exit_normal()
 ```
@@ -2279,6 +2294,15 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Policy-related startup payloads use the implementation's documented approval/sandbox settings
 - Thread and turn identities exposed by the targeted protocol are extracted and used to emit
   `session_started`
+- The exact thread ID returned by `thread/start` is sent in one `thread/archive` request after the
+  worker's final turn, and the client waits for the matching response before disconnecting
+- In-worker continuation turns reuse the live thread without archival between turns
+- Normal completion, turn errors, and input-required results archive the started thread
+- Failed `thread/start` requests do not send `thread/archive`
+- Archival failures are warned and do not alter worker results, app-server shutdown, retry
+  scheduling, post-run hooks, or workspace cleanup
+- Thread archival applies through the common Agent Runner lifecycle without tracker-specific or
+  workflow-specific configuration
 - Request/response read timeout is enforced
 - Turn timeout is enforced
 - Transport framing required by the targeted protocol is handled correctly
