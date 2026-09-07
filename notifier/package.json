@@ -1,6 +1,5 @@
 {
   "name": "symphony-notifier",
-  "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -10,12 +9,9 @@
     "start": "node src/main.ts"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.1",
-    "@slack/web-api": "^8.0.0",
-    "hono": "^4.13.2",
+    "@hono/node-server": "latest",
+    "@slack/web-api": "latest",
+    "hono": "latest",
     "zod": "catalog:"
-  },
-  "engines": {
-    "node": ">=24"
   }
 }

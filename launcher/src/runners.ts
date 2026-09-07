@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { LOGS_ROOT, NOTIFIER_PROCESS_NAME, ROOT } from "./constants.ts"
 import { buildEnv, readSharedEnv } from "./env.ts"
 import { prepareNotifier, startOrRestartNotifier, stopNotifier } from "./notifier.ts"
+import type { PreparedNotifier } from "./notifier.ts"
 import { OperationError } from "./output.ts"
 import type { OperationResult, OperationTarget } from "./output.ts"
 import { mutatePm2, startPm2App } from "./pm2-actions.ts"
@@ -46,14 +47,6 @@ export const requireWorkflowFile = async (instance: Instance): Promise<void> => 
   }
 }
 
-const matchesRef = (
-  ref: InstanceRef,
-  alias: string | undefined,
-  workflow: WorkflowName | undefined,
-): boolean =>
-  (alias === undefined || ref.alias === alias) &&
-  (workflow === undefined || ref.workflow === workflow)
-
 const operationTarget = (ref: InstanceRef): OperationTarget => ({
   type: "instance",
   alias: ref.alias,
@@ -62,15 +55,20 @@ const operationTarget = (ref: InstanceRef): OperationTarget => ({
 
 const runningRefs = (
   processes: Map<string, Pm2Process>,
+  aliases: string[],
   workflow: WorkflowName | undefined,
 ): InstanceRef[] =>
   Array.from(processes.keys())
     .toSorted()
     .flatMap((name) => {
       const ref = parseProcessName(name)
-      if (ref === undefined || (workflow !== undefined && ref.workflow !== workflow)) return []
-      return [ref]
+      return ref === undefined ? [] : [ref]
     })
+    .filter(
+      (ref) =>
+        (aliases.length === 0 || aliases.includes(ref.alias)) &&
+        (workflow === undefined || ref.workflow === workflow),
+    )
 
 const resolveStartTargets = (
   registry: Map<string, Target>,
@@ -93,7 +91,7 @@ const resolveStartTargets = (
   if (aliases.length > 0) {
     return aliases.flatMap((alias) => selectInstances(lookupTarget(registry, alias), workflow))
   }
-  return runningRefs(processes, workflow).map((ref) => lookupInstance(registry, ref))
+  return runningRefs(processes, [], workflow).map((ref) => lookupInstance(registry, ref))
 }
 
 interface StartContext {
@@ -168,7 +166,7 @@ const validateInstances = async (instances: Instance[]): Promise<void> => {
 
 const prepareOperationNotifier = async (
   sharedEnv: Record<string, string>,
-): ReturnType<typeof prepareNotifier> => {
+): Promise<PreparedNotifier> => {
   try {
     return await prepareNotifier(sharedEnv)
   } catch (error) {
@@ -208,7 +206,7 @@ export const runStartOrRestart = async (
       ? []
       : [
           await startOrRestartNotifier(
-            command === "start" ? "start" : "restart",
+            command,
             processes.get(NOTIFIER_PROCESS_NAME),
             notifier,
             mutation,
@@ -247,25 +245,16 @@ export const runStop = async (
   const pm2Path = await findExecutable("pm2")
   const processes = await readSymphonyProcesses(pm2Path)
   // 중지 대상은 레지스트리가 아니라 실행 중인 프로세스에서 해석한다.
-  const refs = Array.from(processes.keys())
-    .toSorted()
-    .flatMap((name) => {
-      const ref = parseProcessName(name)
-      if (ref === undefined) return []
-      const matches =
-        aliases.length > 0
-          ? aliases.some((alias) => matchesRef(ref, alias, workflow))
-          : matchesRef(ref, undefined, workflow)
-      return matches ? [ref] : []
-    })
-  const notifier = processes.get(NOTIFIER_PROCESS_NAME)
+  const refs = runningRefs(processes, aliases, workflow)
   if (refs.length === 0 && !withNotifier) {
     return []
   }
 
   const mutation = { pm2Path }
   const results = await stopProcesses(mutation, refs, 0, [])
-  if (withNotifier) results.push(await stopNotifier(notifier, mutation))
+  if (withNotifier) {
+    results.push(await stopNotifier(processes.get(NOTIFIER_PROCESS_NAME), mutation))
+  }
   return results
 }
 

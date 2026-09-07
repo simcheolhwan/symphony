@@ -165,7 +165,7 @@ symphonyctl notifier start|stop|restart
 로컬 설정은 저장소 밖 `~/.config/symphony/`에 두고 커밋하지 않는다. 두 파일 모두 필수라 없으면 기동 명령이 실패한다 (알림을 쓰지 않아도 `env`는 빈 파일로 둔다). 레지스트리 스키마가 어긋나면 프로세스를 건드리기 전에 실패한다.
 
 - `targets.json`: target 레지스트리. 별칭을 키로 하는 객체이고, 별칭은 `^[a-z0-9-]+$` 형식만 허용한다. 문자열 설정은 양끝 공백을 제거한 뒤 비어 있지 않아야 한다.
-- `env`: 인스턴스 공통 환경변수. `KEY=VALUE` 줄만 해석한다. `#` 주석 줄은 무시하고, 키의 `export ` 접두사와 값 양끝의 따옴표 한 겹은 제거하며, 변수 확장과 이스케이프는 지원하지 않는다. `PATH`를 적어도 런처가 자신의 `PATH`로 항상 덮어쓴다. 알림 관련 키는 [`notifier/README.md`](../notifier/README.md)의 설정 절을 따른다.
+- `env`: 인스턴스 공통 환경변수. Node.js의 `util.parseEnv`가 해석하는 dotenv 형식이다. `#` 주석, 키의 `export ` 접두사, 값의 따옴표를 지원하고 변수 확장은 지원하지 않는다. 형식에 맞지 않는 줄은 오류 없이 무시된다. `PATH`를 적어도 런처가 자신의 `PATH`로 항상 덮어쓴다. 알림 관련 키는 [`notifier/README.md`](../notifier/README.md)의 설정 절을 따른다.
 
 ```json
 {

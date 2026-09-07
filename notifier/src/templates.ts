@@ -89,7 +89,7 @@ function statusLine(payload: LifecycleEvent, mentionUserId: string): string {
     segments.push(`관측: ${observed.map((value) => escapeMrkdwn(value)).join(", ")}`)
   }
 
-  return segments.join(" — ")
+  return segments.join(" – ")
 }
 
 // 첫 줄을 요약으로 쓰는 요구는 워크플로 프롬프트가 걸지만 에이전트가 어길 수

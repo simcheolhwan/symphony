@@ -29,13 +29,9 @@ export const runLogs = async (alias: string, workflow: WorkflowName): Promise<nu
       return { path, modifiedAt: (await stat(path)).mtimeMs }
     }),
   )
-  const [first, ...remaining] = files
-  if (first === undefined) {
+  const [latest] = files.toSorted((left, right) => right.modifiedAt - left.modifiedAt)
+  if (latest === undefined) {
     throw new Error(`로그 파일이 없습니다: ${directory}`)
-  }
-  let latest = first
-  for (const file of remaining) {
-    if (file.modifiedAt > latest.modifiedAt) latest = file
   }
   return spawnForeground("tail", ["-n", LOG_TAIL_LINES, "-f", latest.path], process.env)
 }

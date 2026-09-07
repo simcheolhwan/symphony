@@ -1,39 +1,20 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
+import { parseEnv } from "node:util"
+
+import { z } from "zod"
 
 import { ENV_PATH, WORKSPACE_ROOT } from "./constants.ts"
 import { isRecord } from "./guards.ts"
 import { instanceName, instancePath, workflowLabel } from "./registry.ts"
 import type { Instance } from "./registry.ts"
 
-// source 대신 KEY=VALUE만 해석한다. 값의 따옴표 한 겹은 벗기고 변수 확장과 이스케이프는 지원하지 않는다.
-const parseEnvFile = (text: string): Record<string, string> => {
-  const result: Record<string, string> = {}
-  for (const [index, rawLine] of text.split("\n").entries()) {
-    const line = rawLine.trim()
-    if (line === "" || line.startsWith("#")) continue
-    const separator = line.indexOf("=")
-    if (separator <= 0) {
-      // 값에 비밀이 들어 있을 수 있으므로 줄 내용은 출력하지 않는다.
-      throw new Error(`${ENV_PATH} ${index + 1}번째 줄이 KEY=VALUE 형식이 아닙니다.`)
-    }
-    const name = line
-      .slice(0, separator)
-      .replace(/^export\s+/, "")
-      .trim()
-    const value = line.slice(separator + 1).trim()
-    const quoted =
-      value.length >= 2 &&
-      ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'")))
-    result[name] = quoted ? value.slice(1, -1) : value
-  }
-  return result
-}
+// parseEnv의 반환 타입은 값이 undefined일 수 있는 Dict라 스키마로 좁힌다.
+const envSchema = z.record(z.string(), z.string())
 
 export const readSharedEnv = async (): Promise<Record<string, string>> => {
   try {
-    return parseEnvFile(await readFile(ENV_PATH, "utf8"))
+    return envSchema.parse(parseEnv(await readFile(ENV_PATH, "utf8")))
   } catch (error) {
     if (isRecord(error) && error["code"] === "ENOENT") {
       throw new Error(`공통 환경변수 파일이 없습니다: ${ENV_PATH}`, { cause: error })
@@ -45,10 +26,7 @@ export const readSharedEnv = async (): Promise<Record<string, string>> => {
 // pm2 데몬이 오래된 PATH를 유지하고 있어도 mise를 찾도록 현재 PATH를 넘긴다.
 const withCurrentPath = (env: Record<string, string>): Record<string, string> => {
   const path = process.env["PATH"]
-  if (path !== undefined) {
-    env["PATH"] = path
-  }
-  return env
+  return path === undefined ? env : { ...env, PATH: path }
 }
 
 export const buildEnv = (
@@ -77,4 +55,4 @@ export const buildEnv = (
 }
 
 export const buildNotifierEnv = (sharedEnv: Record<string, string>): Record<string, string> =>
-  withCurrentPath({ ...sharedEnv })
+  withCurrentPath(sharedEnv)

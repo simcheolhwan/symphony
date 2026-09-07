@@ -3,17 +3,7 @@ packages:
   - notifier
 
 catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@0.2.9
-  zod: ^4.4.3
-
-overrides:
-  vite@*: "catalog:"
-
-peerDependencyRules:
-  allowAny:
-    - vite
-  allowedVersions:
-    vite: "*"
+  zod: latest
 
 allowBuilds:
   "@simcheolhwan/oxlint-config@git+https://github.com/simcheolhwan/oxlint-config.git": true

@@ -67,8 +67,8 @@ describe("bodyText", () => {
 })
 
 describe("replyText", () => {
-  it("멘션과 함께 이모지와 한국어 레이블로 포맷팅한다", () => {
-    expect(replyText(base, userId)).toBe("<@U01ABCDEFGH> ⛔ 차단 (In Progress) — 운영자 승인 대기")
+  it("멘션과 함께 이모지와 한국어 레이블로 포매팅한다", () => {
+    expect(replyText(base, userId)).toBe("<@U01ABCDEFGH> ⛔ 차단 (In Progress) – 운영자 승인 대기")
   })
 
   it("reason이 없으면 생략한다", () => {
@@ -84,11 +84,11 @@ describe("replyText", () => {
     ["settled", "<@U01ABCDEFGH> 💤 대기 (In Progress)"],
     ["mergeable", "<@U01ABCDEFGH> 🔔 수렴 (In Progress)"],
     ["finished", "<@U01ABCDEFGH> ✅ 종결 (In Progress)"],
-  ])("%s 이벤트를 포맷팅한다", (event, expected) => {
+  ])("%s 이벤트를 포매팅한다", (event, expected) => {
     expect(replyText({ ...base, event, reason: undefined }, userId)).toBe(expected)
   })
 
-  it("정의되지 않은 이벤트는 기본 템플릿으로 포맷팅한다", () => {
+  it("정의되지 않은 이벤트는 기본 템플릿으로 포매팅한다", () => {
     expect(replyText({ ...base, event: "paused", reason: undefined }, userId)).toBe(
       "<@U01ABCDEFGH> ℹ️ paused (In Progress)",
     )
@@ -106,14 +106,14 @@ describe("replyText", () => {
       ],
     }
     expect(replyText(payload, userId)).toBe(
-      "<@U01ABCDEFGH> ▶️ 시작 (open) — 디스패치 사유: 미해결 리뷰 스레드 3건, CI 실패 1건, 스레드 없는 Changes requested, 리뷰 재요청 대기",
+      "<@U01ABCDEFGH> ▶️ 시작 (open) – 디스패치 사유: 미해결 리뷰 스레드 3건, CI 실패 1건, 스레드 없는 Changes requested, 리뷰 재요청 대기",
     )
   })
 
   it("합의에 없는 디스패치 사유 코드는 원문 그대로 보여준다", () => {
     const payload: LifecycleEvent = { ...pullRequest, dispatch_reasons: ["merge_conflict:2"] }
     expect(replyText(payload, userId)).toBe(
-      "<@U01ABCDEFGH> ▶️ 시작 (open) — 디스패치 사유: merge_conflict:2",
+      "<@U01ABCDEFGH> ▶️ 시작 (open) – 디스패치 사유: merge_conflict:2",
     )
   })
 
@@ -126,7 +126,7 @@ describe("replyText", () => {
       observed: ["PR 연결"],
     }
     expect(replyText(payload, userId)).toBe(
-      "<@U01ABCDEFGH> 💤 대기 (In Progress) — no remaining dispatch reasons — 디스패치 사유: CI 실패 2건 — 관측: PR 연결",
+      "<@U01ABCDEFGH> 💤 대기 (In Progress) – no remaining dispatch reasons – 디스패치 사유: CI 실패 2건 – 관측: PR 연결",
     )
   })
 
@@ -193,7 +193,7 @@ describe("replyText", () => {
       agent_message: "재시도 정책 구현은 마쳤지만 검증을 끝내지 못했다.",
     }
     expect(replyText(payload, userId)).toBe(
-      "<@U01ABCDEFGH> ⛔ 차단 (In Progress) — 검증 불가: 스테이징 웹훅 시크릿 미제공 — 디스패치 사유: CI 실패 2건\n↳ *(에이전트 요약)* 재시도 정책 구현은 마쳤지만 검증을 끝내지 못했다.",
+      "<@U01ABCDEFGH> ⛔ 차단 (In Progress) – 검증 불가: 스테이징 웹훅 시크릿 미제공 – 디스패치 사유: CI 실패 2건\n↳ *(에이전트 요약)* 재시도 정책 구현은 마쳤지만 검증을 끝내지 못했다.",
     )
   })
 })
@@ -203,7 +203,7 @@ describe("replyBlocks", () => {
     expect(replyBlocks(base, userId)).toEqual([
       {
         type: "section",
-        text: { type: "mrkdwn", text: "<@U01ABCDEFGH> ⛔ 차단 (In Progress) — 운영자 승인 대기" },
+        text: { type: "mrkdwn", text: "<@U01ABCDEFGH> ⛔ 차단 (In Progress) – 운영자 승인 대기" },
       },
     ])
   })
@@ -221,7 +221,7 @@ describe("replyBlocks", () => {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "<@U01ABCDEFGH> ⏭️ 조치 (In Progress) — 디스패치 사유: CI 실패 2건",
+          text: "<@U01ABCDEFGH> ⏭️ 조치 (In Progress) – 디스패치 사유: CI 실패 2건",
         },
       },
       { type: "markdown", text: "↳ **(에이전트 요약)** 재시도 정책을 구현했다." },
@@ -272,14 +272,14 @@ describe("mrkdwn 이스케이프", () => {
       issue: { ...base.issue, state: "<open>" },
     }
     expect(replyText(payload, userId)).toBe(
-      "<@U01ABCDEFGH> ⛔ 차단 (&lt;open&gt;) — agent exited: #PID&lt;0.123.0&gt;",
+      "<@U01ABCDEFGH> ⛔ 차단 (&lt;open&gt;) – agent exited: #PID&lt;0.123.0&gt;",
     )
   })
 
   it("합의에 없는 디스패치 사유 코드를 이스케이프한다", () => {
     const payload: LifecycleEvent = { ...pullRequest, dispatch_reasons: ["<weird>&code"] }
     expect(replyText(payload, userId)).toBe(
-      "<@U01ABCDEFGH> ▶️ 시작 (open) — 디스패치 사유: &lt;weird&gt;&amp;code",
+      "<@U01ABCDEFGH> ▶️ 시작 (open) – 디스패치 사유: &lt;weird&gt;&amp;code",
     )
   })
 

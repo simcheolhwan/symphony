@@ -147,14 +147,9 @@ export const buildMachineStatus = (
   return { status: aggregateStatus(statuses), instances, orphanedProcesses, notifier }
 }
 
-interface SerializedProcessStatus {
-  status: Pm2Status
-  registered: boolean
-  pid: number | null
-  startedAt: string | null
-}
-
-const serializeProcessStatus = (status: ProcessStatus): SerializedProcessStatus => ({
+const serializeProcessStatus = (
+  status: ProcessStatus,
+): z.infer<typeof processStatusJsonSchema> => ({
   status: status.status,
   registered: status.registered,
   pid: status.pid,

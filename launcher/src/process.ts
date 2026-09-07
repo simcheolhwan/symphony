@@ -27,13 +27,12 @@ const findExecutableInDirectories = async (
   }
 }
 
-export const findExecutable = async (command: string): Promise<string> => {
+export const findExecutable = (command: string): Promise<string> => {
   const pathValue = process.env["PATH"]
   if (pathValue === undefined) {
     throw new Error("PATH가 설정되지 않았습니다.")
   }
-  const executable = await findExecutableInDirectories(command, pathValue.split(":"), 0)
-  return executable
+  return findExecutableInDirectories(command, pathValue.split(":"), 0)
 }
 
 export const runProcess = (

@@ -1,6 +1,5 @@
 {
   "name": "symphony-launcher",
-  "version": "0.1.0",
   "private": true,
   "bin": {
     "symphonyctl": "src/symphonyctl.ts"
@@ -12,8 +11,5 @@
   "dependencies": {
     "symphony-notifier": "workspace:*",
     "zod": "catalog:"
-  },
-  "engines": {
-    "node": ">=24"
   }
 }

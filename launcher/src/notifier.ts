@@ -59,9 +59,9 @@ const notifierIsReady = async (healthUrl: string, expectedResponse: string): Pro
       signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS),
     })
     return response.status === 200 && (await response.text()) === expectedResponse
-  } catch (error) {
-    if (!(error instanceof Error)) throw error
-    // 알림 서버가 HTTP 요청을 받을 때까지 발생하는 연결 실패와 요청 타임아웃은 재시도한다.
+    // 알림 서버가 HTTP 요청을 받을 때까지 발생하는 연결 실패와 요청 타임아웃은 재시도 신호일 뿐이라 오류를 보존하지 않는다.
+    // oxlint-disable-next-line eslint/preserve-caught-error
+  } catch {
     return false
   }
 }
