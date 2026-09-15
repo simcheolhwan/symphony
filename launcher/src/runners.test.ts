@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   fetch: vi.fn<typeof fetch>(),
   processes: new Map<string, { name: string; status: string; startedAt: number; pid: number }>(),
   findExecutable: vi.fn<(name: string) => Promise<string>>(),
+  requireExecutable: vi.fn<(path: string) => Promise<void>>(),
   readRegistry: vi.fn<() => Promise<Map<string, Target>>>(),
   readSharedEnv: vi.fn<() => Promise<Record<string, string>>>(),
   runProcess:
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./process.ts", () => ({
   findExecutable: mocks.findExecutable,
+  requireExecutable: mocks.requireExecutable,
   runProcess: mocks.runProcess,
 }))
 
@@ -86,6 +88,7 @@ beforeEach(() => {
   mocks.failOnStart = undefined
   mocks.processes.clear()
   mocks.findExecutable.mockImplementation((name) => Promise.resolve(`/mock/${name}`))
+  mocks.requireExecutable.mockImplementation(() => Promise.resolve())
   mocks.readRegistry.mockResolvedValue(registry)
   mocks.readSharedEnv.mockResolvedValue(sharedEnv)
   mocks.fetch.mockReset()

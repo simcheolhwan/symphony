@@ -2,7 +2,7 @@ import { constants } from "node:fs"
 import { access } from "node:fs/promises"
 import { join } from "node:path"
 
-import { LOGS_ROOT, NOTIFIER_PROCESS_NAME, ROOT } from "./constants.ts"
+import { LOGS_ROOT, MISE_PATH, NOTIFIER_PROCESS_NAME, ROOT } from "./constants.ts"
 import { buildEnv, readSharedEnv } from "./env.ts"
 import { prepareNotifier, startOrRestartNotifier, stopNotifier } from "./notifier.ts"
 import type { PreparedNotifier } from "./notifier.ts"
@@ -12,7 +12,7 @@ import { mutatePm2, startPm2App } from "./pm2-actions.ts"
 import type { Pm2MutationContext } from "./pm2-actions.ts"
 import { readSymphonyProcesses } from "./pm2.ts"
 import type { Pm2Process } from "./pm2.ts"
-import { findExecutable } from "./process.ts"
+import { findExecutable, requireExecutable } from "./process.ts"
 import {
   instancePath,
   lookupInstance,
@@ -96,7 +96,6 @@ const resolveStartTargets = (
 
 interface StartContext {
   command: "start" | "restart"
-  misePath: string
   processes: Map<string, Pm2Process>
   sharedEnv: Record<string, string>
   mutation: Pm2MutationContext
@@ -122,7 +121,7 @@ const startInstance = async (
   try {
     await startPm2App(context.mutation, {
       name,
-      script: context.misePath,
+      script: MISE_PATH,
       args: buildArgs(instance),
       cwd: ROOT,
       env: buildEnv(instance, context.sharedEnv),
@@ -188,7 +187,7 @@ export const runStartOrRestart = async (
   const { all, withNotifier } = options
   const registry = await readRegistry()
   const pm2Path = await findExecutable("pm2")
-  const misePath = await findExecutable("mise")
+  await requireExecutable(MISE_PATH)
   const processes = await readSymphonyProcesses(pm2Path)
 
   const instances = resolveStartTargets(registry, processes, { aliases, workflow, all })
@@ -214,7 +213,7 @@ export const runStartOrRestart = async (
         ]
   return [
     ...notifierResults,
-    ...(await startInstances(instances, { command, misePath, processes, sharedEnv, mutation })),
+    ...(await startInstances(instances, { command, processes, sharedEnv, mutation })),
   ]
 }
 

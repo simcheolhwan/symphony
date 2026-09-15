@@ -6,7 +6,7 @@
     "check": "vp check {launcher,notifier}/src vite.config.ts",
     "check:fix": "vp check --fix {launcher,notifier}/src vite.config.ts",
     "fmt": "vp fmt {launcher,notifier}/src vite.config.ts",
-    "install:symphonyctl": "launcher/install.sh",
+    "install:bin": "launcher/install.sh",
     "lint": "vp lint {launcher,notifier}/src vite.config.ts",
     "lint:fix": "vp lint --fix {launcher,notifier}/src vite.config.ts",
     "test": "vp test"
@@ -15,6 +15,7 @@
     "@simcheolhwan/oxlint-config": "github:simcheolhwan/oxlint-config",
     "@tsconfig/bases": "latest",
     "@types/node": "latest",
+    "mise": "latest",
     "vite-plus": "0.3.0"
   }
 }

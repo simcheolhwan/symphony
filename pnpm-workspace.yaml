@@ -7,3 +7,4 @@ catalog:
 
 allowBuilds:
   "@simcheolhwan/oxlint-config@git+https://github.com/simcheolhwan/oxlint-config.git": true
+  mise: true

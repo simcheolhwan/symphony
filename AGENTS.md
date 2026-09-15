@@ -59,6 +59,8 @@ SPEC.md       # 업스트림 소유
 
 런처의 진입점은 `launcher/src/symphonyctl.ts`다. 명령, 로컬 설정 파일(`~/.config/symphony/`), 주입 환경변수, 프로세스 모델은 [`launcher/README.md`](launcher/README.md)를 따른다.
 
+`elixir/`가 요구하는 `mise`는 저장소 루트의 devDependency라 `pnpm install`이 함께 설치한다. `pnpm install:bin`이 `~/.local/bin/mise`를 그 실행 파일로 링크하므로 문서의 `mise` 명령을 그대로 쓸 수 있다. Erlang과 Elixir 툴체인 설치(`mise install`)와 escript 빌드는 수동이다.
+
 런처가 실행하는 본체는 `elixir/bin/symphony` escript다. 추적하지 않는 빌드 산출물이고 런처는 최신 여부를 알 수 없으므로, `elixir/` 소스나 워크플로 frontmatter가 쓰는 설정 규격을 바꿨으면 `mise -C elixir exec -- mix escript.build`로 다시 빌드한 뒤 인스턴스를 재시작한다. 오래된 escript는 새 설정값을 모른 채 부팅에 실패하고 PM2 재시작 한도까지 반복한다.
 
 알림 서버는 `notifier/`다. 설계, 이벤트 규격, Slack 설정은 [`notifier/README.md`](notifier/README.md)를 따른다.

@@ -23,7 +23,7 @@ export const readSharedEnv = async (): Promise<Record<string, string>> => {
   }
 }
 
-// pm2 데몬이 오래된 PATH를 유지하고 있어도 mise를 찾도록 현재 PATH를 넘긴다.
+// pm2 데몬이 오래된 PATH를 유지하고 있어도 mise가 실행하는 도구들이 해석되도록 현재 PATH를 넘긴다.
 const withCurrentPath = (env: Record<string, string>): Record<string, string> => {
   const path = process.env["PATH"]
   return path === undefined ? env : { ...env, PATH: path }

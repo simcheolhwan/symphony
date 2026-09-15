@@ -35,6 +35,16 @@ export const findExecutable = (command: string): Promise<string> => {
   return findExecutableInDirectories(command, pathValue.split(":"), 0)
 }
 
+export const requireExecutable = async (path: string): Promise<void> => {
+  try {
+    await access(path, constants.X_OK)
+  } catch (error) {
+    throw new Error(`실행 파일이 없습니다: ${path}. 저장소 루트에서 pnpm install을 실행하세요.`, {
+      cause: error,
+    })
+  }
+}
+
 export const runProcess = (
   command: string,
   args: string[],

@@ -1,9 +1,9 @@
 import { readdir, stat } from "node:fs/promises"
 import { join } from "node:path"
 
-import { LOGS_ROOT } from "./constants.ts"
+import { LOGS_ROOT, MISE_PATH } from "./constants.ts"
 import { buildEnv, readSharedEnv } from "./env.ts"
-import { findExecutable, spawnForeground } from "./process.ts"
+import { requireExecutable, spawnForeground } from "./process.ts"
 import { instancePath, lookupInstance, readRegistry } from "./registry.ts"
 import type { WorkflowName } from "./registry.ts"
 import { buildArgs, requireWorkflowFile } from "./runners.ts"
@@ -50,7 +50,7 @@ const systemEnv = (): Record<string, string> => {
 export const runForeground = async (alias: string, workflow: WorkflowName): Promise<number> => {
   const instance = lookupInstance(await readRegistry(), { alias, workflow })
   await requireWorkflowFile(instance)
-  const misePath = await findExecutable("mise")
+  await requireExecutable(MISE_PATH)
   const env = { ...systemEnv(), ...buildEnv(instance, await readSharedEnv()) }
-  return spawnForeground(misePath, buildArgs(instance), env)
+  return spawnForeground(MISE_PATH, buildArgs(instance), env)
 }
