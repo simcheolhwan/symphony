@@ -25,7 +25,6 @@ launcher/     # 포크 소유: 런처 symphonyctl
 notifier/     # 포크 소유: Slack 알림 서버
 AGENTS.md     # 포크 소유: 루트 문서
 VISION.md     # 포크 소유
-CLAUDE.md     # 포크 소유
 elixir/       # 업스트림 소유: 오케스트레이터와 어댑터
 docs/         # 업스트림 소유
 README.md     # 업스트림 소유
