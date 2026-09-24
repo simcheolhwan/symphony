@@ -9,10 +9,10 @@ export const THREADS_PATH = join(homedir(), ".config", "symphony", "notifier-thr
 
 // chat.postMessage 인자는 text, blocks, attachments 변형의 유니온이라 SDK가 블록
 // 배열 타입을 이름으로 노출하지 않는다. 블록 타입을 다시 정의하지 않도록 인자
-// 타입에서 뽑아 쓴다.
+// 타입에서 추출해 쓴다.
 export type MessageBlocks = Extract<ChatPostMessageArguments, { blocks: unknown }>["blocks"]
 
-// 상한에서 밀려난 작업의 이벤트는 새 본문으로 시작한다. 항목 하나가 짧은 문자열
+// 상한을 넘어 축출된 작업의 이벤트는 새 본문으로 시작한다. 항목 하나가 짧은 문자열
 // 두 개라 500개는 파일 크기와 메모리 모두 무시할 수 있는 수준이다.
 const MAX_THREADS = 500
 
@@ -61,7 +61,7 @@ export class SlackThreads {
 
   /**
    * 같은 키의 작업을 도착 순서대로 직렬 실행한다. 본문 게시가 끝나 ts를 확보한
-   * 뒤에만 답장을 게시할 수 있으므로 이 직렬화가 스레드 정합성의 근거다.
+   * 뒤에만 답글을 게시할 수 있으므로 이 직렬화가 스레드 정합성의 근거다.
    * 실패는 로그만 남기고 버려 이후 이벤트 게시를 막지 않는다.
    */
   enqueue(key: string, task: () => Promise<void>): void {
@@ -84,7 +84,7 @@ export class SlackThreads {
   }
 
   /**
-   * 메시지를 게시하고 ts를 반환한다. threadTs가 있으면 스레드 답장으로 게시한다.
+   * 메시지를 게시하고 ts를 반환한다. threadTs가 있으면 스레드 답글로 게시한다.
    * blocks를 함께 보내면 text는 알림 미리보기와 스크린리더 폴백으로 쓰인다.
    */
   async post(text: string, threadTs?: string, blocks?: MessageBlocks): Promise<string> {

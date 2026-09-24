@@ -1,6 +1,3 @@
-import { constants } from "node:fs"
-import { access } from "node:fs/promises"
-import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 
 import { NOTIFIER_PROCESS_NAME, NOTIFIER_ROOT } from "./constants.ts"
@@ -26,12 +23,12 @@ export interface PreparedNotifier {
 
 const NOTIFIER_TARGET: OperationTarget = { type: "notifier" }
 
+// 설정 모듈은 notifier/의 의존성을 함께 로드하므로, 미설치 상태가 notifier와 무관한 명령까지 실패시키지 않도록 지연 로드한다.
 const loadNotifierConfigModule = async (): Promise<typeof import("symphony-notifier/config")> => {
   try {
-    await access(join(NOTIFIER_ROOT, "node_modules"), constants.R_OK)
     return await import("symphony-notifier/config")
   } catch (error) {
-    throw new Error("알림 서버 의존성이 없습니다. notifier/에서 pnpm install을 실행하세요.", {
+    throw new Error("알림 서버 의존성이 없습니다. 저장소 루트에서 pnpm install을 실행하세요.", {
       cause: error,
     })
   }

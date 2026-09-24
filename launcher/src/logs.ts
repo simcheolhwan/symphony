@@ -36,8 +36,8 @@ export const runLogs = async (alias: string, workflow: WorkflowName): Promise<nu
   return spawnForeground("tail", ["-n", LOG_TAIL_LINES, "-f", latest.path], process.env)
 }
 
-// PM2로 띄운 프로세스는 현재 셸이 아니라 PM2 데몬의 (대개 최소) 환경을 물려받으므로,
-// 전면 실행도 시스템 필수 변수만 상속해 셸의 임시 변수가 env 파일 누락을 가리는 차이를 없앤다.
+// PM2로 시작한 프로세스는 현재 셸이 아니라 PM2 데몬의 (대개 최소) 환경을 물려받으므로,
+// 포그라운드 실행도 시스템 필수 변수만 상속해 셸의 임시 변수가 env 파일 누락을 가리는 차이를 없앤다.
 const systemEnv = (): Record<string, string> => {
   const result: Record<string, string> = {}
   for (const key of ["HOME", "LANG", "LC_ALL", "TMPDIR"]) {

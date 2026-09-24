@@ -80,6 +80,7 @@ codex:
    gh api repos/{{ issue.native_ref.repo }}/pulls/{{ issue.id }}/requested_reviewers --jq '.users[].login'
    gh api repos/{{ issue.native_ref.repo }}/pulls/{{ issue.id }}/requested_reviewers -X POST -f 'reviewers[]=<login>'
    ```
+
 6. 응답과 재요청을 마치면 세션을 끝내라. 푸시가 만든 새 리뷰나 check 결과를 세션 안에서 기다리지 마라. 새 스레드와 check 실패는 다음 폴링이 디스패치 사유로 잡는다.
 
 ## 완료 기준

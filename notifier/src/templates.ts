@@ -92,7 +92,7 @@ function statusLine(payload: LifecycleEvent, mentionUserId: string): string {
   return segments.join(" – ")
 }
 
-// 첫 줄을 요약으로 쓰는 요구는 워크플로 프롬프트가 걸지만 에이전트가 어길 수
+// 첫 줄을 요약으로 쓰라는 요구는 워크플로 프롬프트가 명시하지만 에이전트가 어길 수
 // 있으므로, 표현 계층에서 첫 줄만 취하고 길이를 자른다.
 function agentSummary(agentMessage: string | undefined): string | undefined {
   if (agentMessage === undefined) return undefined

@@ -1,5 +1,5 @@
 {
-  "extends": ["@tsconfig/bases/strictest", "@tsconfig/bases/node24", "@tsconfig/bases/node-ts"],
+  "extends": ["@tsconfig/bases/strictest", "@tsconfig/bases/node26", "@tsconfig/bases/node-ts"],
   "compilerOptions": {
     "types": ["node", "vite-plus/test/globals"]
   },

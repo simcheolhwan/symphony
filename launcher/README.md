@@ -8,9 +8,9 @@ flowchart LR
     P -->|mise exec| S[symphony escript]
 ```
 
-진입점은 `src/symphonyctl.ts`다. Node 24의 네이티브 type stripping으로 TypeScript를 그대로 실행하므로 빌드가 없다. 외부 입력인 `targets.json`과 PM2 응답은 Zod로 파싱한다. 저장소를 처음 설치하거나 의존성이 바뀌면 저장소 루트에서 `pnpm install`을 실행해야 한다. `mise`는 이 설치가 저장소 devDependency로 받으므로 런처가 `node_modules/mise/bin/mise`를 절대 경로로 실행하고, PM2만 `PATH`에서 해석하므로 전역 설치가 필요하다.
+진입점은 `src/symphonyctl.ts`다. Node 26의 네이티브 type stripping으로 TypeScript를 그대로 실행하므로 빌드가 없다. 외부 입력인 `targets.json`과 PM2 응답은 Zod로 파싱한다. 저장소를 처음 설치하거나 의존성이 바뀌면 저장소 루트에서 `pnpm install`을 실행해야 한다. `mise`는 이 설치가 저장소 devDependency로 받으므로 런처가 `node_modules/mise/bin/mise`를 절대 경로로 실행하고, PM2만 `PATH`에서 해석하므로 전역 설치가 필요하다.
 
-저장소 루트에서 `pnpm install:bin`을 실행하면 `~/.local/bin/symphonyctl`이 진입점을, `~/.local/bin/mise`가 저장소가 설치한 mise 실행 파일을 가리키는 절대 심볼릭 링크로 설치된다. mise의 shim은 argv[0]으로 대상 도구를 판별하므로 링크는 pnpm의 `node_modules/.bin` 래퍼가 아니라 실행 파일을 직접 가리킨다. 일반 셸과 `symphonyctl`을 호출하는 데몬의 `PATH`에 `~/.local/bin`이 있어야 한다. 저장소를 옮겼으면 명령을 다시 실행한다.
+저장소 루트에서 `pnpm install:bin`을 실행하면 `~/.local/bin/symphonyctl`이 진입점을, `~/.local/bin/mise`가 저장소가 설치한 mise 실행 파일을 가리키는 절대 심볼릭 링크로 설치된다. mise의 shim은 `argv[0]`으로 대상 도구를 판별하므로 링크는 pnpm의 `node_modules/.bin` 래퍼가 아니라 실행 파일을 직접 가리킨다. 일반 셸과 `symphonyctl`을 호출하는 데몬의 `PATH`에 `~/.local/bin`이 있어야 한다. 저장소를 옮겼으면 명령을 다시 실행한다.
 
 escript는 다음 인자로 기동한다.
 
@@ -43,12 +43,12 @@ symphonyctl notifier start|stop|restart
 - `start --all --with-notifier`는 설정과 의존성을 모두 검증하고 알림 서버를 시작한 뒤 [상태 확인 응답](../notifier/README.md#상태-확인)을 최대 10초 동안 기다린다. 응답을 확인한 뒤에만 활성 인스턴스를 시작한다. `stop --with-notifier`는 PM2에 등록된 모든 Symphony 인스턴스, 알림 서버 순으로 중지한다. `restart --with-notifier`는 알림 서버와 기존 인자 없는 `restart` 대상 전체를 재시작한다.
 - 조작 명령은 목표 상태에 이미 도달한 대상을 변경하지 않는다. 일부 PM2 조작이 실패하면 앞선 변경을 롤백하거나 별도 스냅샷으로 저장하지 않는다. 현재 상태는 `ls`로 다시 확인한다.
 - `logs`는 escript가 남기는 disk_log 순환 파일 중 최근 파일을 마지막 100줄부터 `tail -f`로 따라간다.
-- `run`은 PM2를 거치지 않고 같은 명령을 전면에서 실행한다. 디버깅용이다. 현재 셸 환경은 상속하지 않고 시스템 필수 변수(`HOME` 등)와 주입 환경변수만 전달해 PM2 실행과 같은 조건을 유지한다.
+- `run`은 PM2를 거치지 않고 같은 명령을 포그라운드에서 실행한다. 디버깅용이다. 현재 셸 환경은 상속하지 않고 시스템 필수 변수(`HOME` 등)와 주입 환경변수만 전달해 PM2 실행과 같은 조건을 유지한다.
 - `notifier`는 알림 서버([`notifier/`](../notifier/README.md)) 전용 하위 명령이다. 인스턴스가 아니므로 별칭과 워크플로가 없다. 로그는 `pm2 logs symphony:notifier`로 확인한다.
 
 ## 출력 규격
 
-`ls`와 조작 명령은 진행 메시지, ANSI 코드, 사람용 표 없이 표준 출력에 JSON 객체 하나만 쓴다. `symphonyctl`이 실행한 PM2 명령의 출력도 캡처하므로 응답에 섞이지 않는다. `logs`와 `run`은 전면 프로세스의 출력을 그대로 사용하고, 인자 없는 호출과 `help`는 사용법을 텍스트로 출력한다.
+`ls`와 조작 명령은 진행 메시지, ANSI 코드, 사람용 표 없이 표준 출력에 JSON 객체 하나만 쓴다. `symphonyctl`이 실행한 PM2 명령의 출력도 캡처하므로 응답에 섞이지 않는다. `logs`와 `run`은 포그라운드 프로세스의 출력을 그대로 사용하고, 인자 없는 호출과 `help`는 사용법을 텍스트로 출력한다.
 
 ### 상태
 
@@ -96,15 +96,15 @@ symphonyctl notifier start|stop|restart
 }
 ```
 
-| 필드 | 규격 |
-| --- | --- |
-| `status` | 기기 전체 집계 상태. `online`, `stopped`, `partial`, `transitioning`, `errored` 중 하나다 |
-| `instances` | `targets.json`에서 활성화한 모든 대상과 워크플로 조합이다. PM2에 없으면 `status: "stopped"`, `registered: false`로 남는다 |
+| 필드                | 규격                                                                                                                                                           |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`            | 기기 전체 집계 상태. `online`, `stopped`, `partial`, `transitioning`, `errored` 중 하나다                                                                      |
+| `instances`         | `targets.json`에서 활성화한 모든 대상과 워크플로 조합이다. PM2에 없으면 `status: "stopped"`, `registered: false`로 남는다                                      |
 | `orphanedProcesses` | `symphony:` 접두사로 PM2에 등록됐지만 현재 활성 인스턴스나 notifier가 아닌 프로세스다. 이름을 인스턴스 ID로 해석할 수 없으면 `alias`와 `workflow`가 `null`이다 |
-| `notifier` | 기기당 하나인 notifier 상태다. PM2에 없으면 `status: "stopped"`, `registered: false`다 |
-| `registered` | 해당 리소스가 PM2에 등록됐는지 나타낸다. 등록된 PM2 프로세스 자체가 `stopped`인 경우에도 `true`다 |
-| `pid` | 실행 중인 프로세스의 PID다. PM2가 PID를 `0`으로 보고하거나 프로세스가 등록되지 않았으면 `null`이다 |
-| `startedAt` | PM2의 시작 시각을 UTC ISO 8601 문자열로 변환한 값이다. PM2가 시작 시각을 `0`으로 보고하거나 프로세스가 등록되지 않았으면 `null`이다 |
+| `notifier`          | 기기당 하나인 notifier 상태다. PM2에 없으면 `status: "stopped"`, `registered: false`다                                                                         |
+| `registered`        | 해당 리소스가 PM2에 등록됐는지 나타낸다. 등록된 PM2 프로세스 자체가 `stopped`인 경우에도 `true`다                                                              |
+| `pid`               | 실행 중인 프로세스의 PID다. PM2가 PID를 `0`으로 보고하거나 프로세스가 등록되지 않았으면 `null`이다                                                             |
+| `startedAt`         | PM2의 시작 시각을 UTC ISO 8601 문자열로 변환한 값이다. PM2가 시작 시각을 `0`으로 보고하거나 프로세스가 등록되지 않았으면 `null`이다                            |
 
 리소스의 `status`는 PM2 상태를 그대로 보존하는 안정적인 영어 식별자다. 허용값은 `online`, `launching`, `stopping`, `stopped`, `errored`, `waiting restart`, `one-launch-status`다. 알 수 없는 상태는 임의로 변환하지 않고 PM2 입력 스키마 오류로 처리한다.
 
@@ -141,20 +141,20 @@ symphonyctl notifier start|stop|restart
 }
 ```
 
-| 필드 | 규격 |
-| --- | --- |
-| `command` | `start`, `restart`, `stop` 중 하나다. notifier 명령은 하위 동작을 이 값으로 쓴다 |
-| `target.type` | `instance` 또는 `notifier`다 |
-| `target.alias`, `target.workflow` | 인스턴스 대상에만 있다 |
-| `outcome` | `started`, `restarted`, `stopped`, `unchanged` 중 하나다. `restart` 대상이 등록되지 않아 새로 시작했으면 `started`다 |
+| 필드                              | 규격                                                                                                                 |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `command`                         | `start`, `restart`, `stop` 중 하나다. notifier 명령은 하위 동작을 이 값으로 쓴다                                     |
+| `target.type`                     | `instance` 또는 `notifier`다                                                                                         |
+| `target.alias`, `target.workflow` | 인스턴스 대상에만 있다                                                                                               |
+| `outcome`                         | `started`, `restarted`, `stopped`, `unchanged` 중 하나다. `restart` 대상이 등록되지 않아 새로 시작했으면 `started`다 |
 
-`start`가 이미 online인 대상을 만나거나 `notifier stop`의 프로세스가 등록되지 않았으면 `unchanged`다. `stop`은 등록된 프로세스에서 대상을 찾으므로 일치하는 인스턴스가 없으면 결과가 비어 있다.
+`start`의 대상이 이미 online이거나 `notifier stop`의 프로세스가 등록되지 않았으면 `unchanged`다. `stop`은 등록된 프로세스에서 대상을 찾으므로 일치하는 인스턴스가 없으면 결과가 비어 있다.
 
 ### 오류
 
 오류는 표준 오류에 JSON 한 줄을 쓰고 종료 코드 `1`을 반환한다. 명령 파싱이나 설정 읽기처럼 특정 조작 대상이 없는 오류에는 `message`만 있다. 대상 처리 중 실패하면 `stage`와 `target`을 추가한다. `stage`는 `validate`, `delete`, `start`, `health-check` 중 하나다.
 
-```json
+```
 {"schemaVersion":1,"error":{"message":"PM2 start failed","stage":"start","target":{"type":"instance","alias":"myrepo","workflow":"linear"}}}
 ```
 
@@ -162,7 +162,7 @@ symphonyctl notifier start|stop|restart
 
 ## 설정
 
-로컬 설정은 저장소 밖 `~/.config/symphony/`에 두고 커밋하지 않는다. 두 파일 모두 필수라 없으면 기동 명령이 실패한다 (알림을 쓰지 않아도 `env`는 빈 파일로 둔다). 레지스트리 스키마가 어긋나면 프로세스를 건드리기 전에 실패한다.
+로컬 설정은 저장소 밖 `~/.config/symphony/`에 두고 커밋하지 않는다. 두 파일 모두 필수라 없으면 기동 명령이 실패한다 (알림을 쓰지 않아도 `env`는 빈 파일로 둔다). 레지스트리 스키마가 어긋나면 프로세스를 조작하기 전에 실패한다.
 
 - `targets.json`: target 레지스트리. 별칭을 키로 하는 객체이고, 별칭은 `^[a-z0-9-]+$` 형식만 허용한다. 문자열 설정은 양끝 공백을 제거한 뒤 비어 있지 않아야 한다.
 - `env`: 인스턴스 공통 환경변수. Node.js의 `util.parseEnv`가 해석하는 dotenv 형식이다. `#` 주석, 키의 `export ` 접두사, 값의 따옴표를 지원하고 변수 확장은 지원하지 않는다. 형식에 맞지 않는 줄은 오류 없이 무시된다. `PATH`를 적어도 런처가 자신의 `PATH`로 항상 덮어쓴다. 알림 관련 키는 [`notifier/README.md`](../notifier/README.md)의 설정 절을 따른다.
@@ -181,29 +181,29 @@ symphonyctl notifier start|stop|restart
 }
 ```
 
-| 필드 | 설명 |
-| --- | --- |
-| `repo` | 대상 GitHub 저장소 (`owner/name`) |
-| `project` | Linear 프로젝트 슬러그. `linear` 워크플로를 켰으면 필수 |
-| `workflows.<이름>` | 켤 워크플로. `linear`, `pr-author`, `pr-reviewer` 중에서 고른다 |
-| `workflows.<이름>.model` | 에이전트 모델. 생략하면 주입하지 않아 워크플로 기본값을 쓴다 |
-| `workflows.<이름>.model_reasoning_effort` | 추론 수준. 기본 `xhigh` |
+| 필드                                      | 설명                                                            |
+| ----------------------------------------- | --------------------------------------------------------------- |
+| `repo`                                    | 대상 GitHub 저장소 (`owner/name`)                               |
+| `project`                                 | Linear 프로젝트 슬러그. `linear` 워크플로를 켰으면 필수         |
+| `workflows.<이름>`                        | 켤 워크플로. `linear`, `pr-author`, `pr-reviewer` 중에서 고른다 |
+| `workflows.<이름>.model`                  | 에이전트 모델. 생략하면 주입하지 않아 워크플로 기본값을 쓴다    |
+| `workflows.<이름>.model_reasoning_effort` | 추론 수준. 기본 `xhigh`                                         |
 
 ## 주입 환경변수
 
 공통 `env` 파일을 그대로 병합한 뒤 인스턴스별 값을 덧붙여 프로세스에 주입한다. 워크플로 frontmatter와 본문이 참조하는 인터페이스다.
 
-| 환경변수 | 값 |
-| --- | --- |
-| `GITHUB_REPO` | target의 `repo` |
-| `LINEAR_PROJECT_SLUG` | target의 `project` (`linear` 워크플로만) |
-| `SYMPHONY_MODEL` | 워크플로 설정의 `model` (지정했을 때만) |
-| `SYMPHONY_MODEL_REASONING_EFFORT` | 워크플로 설정의 `model_reasoning_effort` |
-| `SYMPHONY_WORKSPACE_ROOT` | `~/.symphony/<별칭>/<워크플로>` |
-| `SYMPHONY_INSTANCE_NAME` | 알림 스레드를 인스턴스별로 가르는 이름 (예: `Linear · myrepo`) |
-| `SYMPHONY_WORKFLOW_LABEL` | 알림 본문에 표시하는 워크플로 레이블 |
-| `SYMPHONY_TARGET_NAME` | 알림 본문에 표시하는 대상 이름 (별칭) |
-| `PATH` | 런처 실행 시점의 `PATH`. pm2 데몬이 오래된 `PATH`를 유지하고 있어도 `mise`를 찾게 한다 |
+| 환경변수                          | 값                                                                                     |
+| --------------------------------- | -------------------------------------------------------------------------------------- |
+| `GITHUB_REPO`                     | target의 `repo`                                                                        |
+| `LINEAR_PROJECT_SLUG`             | target의 `project` (`linear` 워크플로만)                                               |
+| `SYMPHONY_MODEL`                  | 워크플로 설정의 `model` (지정했을 때만)                                                |
+| `SYMPHONY_MODEL_REASONING_EFFORT` | 워크플로 설정의 `model_reasoning_effort`                                               |
+| `SYMPHONY_WORKSPACE_ROOT`         | `~/.symphony/<별칭>/<워크플로>`                                                        |
+| `SYMPHONY_INSTANCE_NAME`          | 알림 스레드를 인스턴스별로 가르는 이름 (예: `Linear · myrepo`)                         |
+| `SYMPHONY_WORKFLOW_LABEL`         | 알림 본문에 표시하는 워크플로 레이블                                                   |
+| `SYMPHONY_TARGET_NAME`            | 알림 본문에 표시하는 대상 이름 (별칭)                                                  |
+| `PATH`                            | 런처 실행 시점의 `PATH`. pm2 데몬이 오래된 `PATH`를 유지하고 있어도 `mise`를 찾게 한다 |
 
 ## 프로세스 모델
 
@@ -235,4 +235,4 @@ src/constants.ts       # 경로와 프로세스 접두사
 src/guards.ts          # 타입 가드
 ```
 
-`targets.json`과 `pm2 jlist`는 각각의 Zod 스키마에서 검증한 뒤 도메인 타입으로 변환하고, 상태, 조작 결과, 오류는 별도 Zod 출력 스키마로 검증한다. 같은 디렉터리의 테스트에서 입력 파싱, 상태 집계, 출력 직렬화, 알림 서버 준비 대기, 기기 전체 조작 순서와 실패 처리를 검증한다 (저장소 루트에서 `pnpm test`).
+`targets.json`과 `pm2 jlist`는 각각의 Zod 스키마에서 검증한 뒤 도메인 타입으로 변환하고, 상태, 조작 결과, 오류는 별도 Zod 출력 스키마로 검증한다. 같은 디렉터리의 테스트에서 입력 파싱, 상태 집계, 출력 직렬화, 알림 서버 준비 대기, 기기 전체 조작 순서와 실패 처리를 검증한다.
